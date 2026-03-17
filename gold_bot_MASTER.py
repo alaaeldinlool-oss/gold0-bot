@@ -68,10 +68,10 @@ except ImportError:
     print("⚠️  ta library not found — using built-in indicators")
 
 try:
-    import anthropic
-    HAS_CLAUDE = True
+    from groq import Groq
+    HAS_GROQ = True
 except ImportError:
-    HAS_CLAUDE = False
+    HAS_GROQ = False
 
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -90,8 +90,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1Ow
 # TwelveData API Key — twelvedata.com (free plan: 800 req/day)
 TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e")
 
-# Claude API Key (اختياري — للتحليل بالذكاء الاصطناعي)
-CLAUDE_KEY      = os.getenv("CLAUDE_KEY",      "")
+# Groq API Key (مجاني — من console.groq.com)
+GROQ_KEY        = os.getenv("GROQ_KEY",        "")
 
 # Chat IDs for daily reports (أضف الـ chat IDs اللي تحب ترسلها)
 REPORT_CHAT_IDS = []  # مثال: [123456789, -987654321]
@@ -647,14 +647,14 @@ def fmt_smc_msg(obs: list, fvgs: list, ms: str, price: float) -> str:
     return '\n'.join(lines)
 
 # ════════════════════════════════════════════════════════════════
-#  CLAUDE AI ANALYSIS
+#  GROQ AI ANALYSIS (مجاني)
 # ════════════════════════════════════════════════════════════════
 
 async def claude_analysis(sig: dict) -> str:
-    if not HAS_CLAUDE or not CLAUDE_KEY:
-        return "⚠️ Claude API غير مفعّل. أضف CLAUDE_KEY في الإعدادات."
+    if not HAS_GROQ or not GROQ_KEY:
+        return "⚠️ Groq API غير مفعّل. أضف GROQ_KEY في Render Environment Variables.\nاحصل على Key المجاني من: console.groq.com"
     try:
-        client = anthropic.Anthropic(api_key=CLAUDE_KEY)
+        client = Groq(api_key=GROQ_KEY)
         prompt = f"""أنت محلل ذهب محترف. حلل البيانات التالية وقدم رأيك باختصار بالعربية:
 
 السعر: ${sig['price']:.3f}
@@ -671,14 +671,15 @@ EMA Stack: {'صاعدة' if sig['ema_bull'] else 'هابطة' if sig['ema_bear']
 2. أهم مستويين للمراقبة
 3. توصية واضحة (شراء/بيع/انتظار) مع السبب"""
 
-        msg = client.messages.create(
-            model='claude-sonnet-4-6',
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=400,
-            messages=[{'role': 'user', 'content': prompt}]
         )
-        return f"🤖 *تحليل Claude AI:*\n\n{msg.content[0].text}"
+        result = response.choices[0].message.content
+        return f"🤖 *تحليل Groq AI:*\n\n{result}"
     except Exception as e:
-        return f"⚠️ Claude error: {str(e)[:100]}"
+        return f"⚠️ Groq error: {str(e)[:100]}"
 
 # ════════════════════════════════════════════════════════════════
 #  ALERT ENGINE
@@ -1092,14 +1093,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        reply_markup=main_keyboard())
 
     elif data == "ai":
-        if not HAS_CLAUDE or not CLAUDE_KEY:
-            text = ("🤖 *Claude AI*\n\n"
+        if not HAS_GROQ or not GROQ_KEY:
+            text = ("🤖 *Groq AI*\n\n"
                     "❌ غير مفعّل حالياً\n\n"
                     "لتفعيله أضف في Render:\n"
-                    "Key: `CLAUDE_KEY`\n"
-                    "Value: مفتاح API من console.anthropic.com\n\n"
+                    "Key: `GROQ_KEY`\n"
+                    "Value: مفتاح API من console.groq.com\n\n"
                     "الحصول على مفتاح مجاني:\n"
-                    "1. روح console.anthropic.com\n"
+                    "1. روح console.groq.com\n"
                     "2. سجّل حساب مجاني\n"
                     "3. أنشئ API Key")
         else:
@@ -1113,7 +1114,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     sig  = full_analysis(d)
                     text = await claude_analysis(sig)
             except Exception as e:
-                text = f"❌ خطأ في Claude AI: {str(e)}"
+                text = f"❌ خطأ في Groq AI: {str(e)}"
         await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
@@ -1522,7 +1523,7 @@ def main():
         return
 
     print("🥇 GOLD MASTER BOT Starting...")
-    print(f"   Claude AI: {'✅' if HAS_CLAUDE and CLAUDE_KEY else '❌ (اختياري)'}")
+    print(f"   Groq AI: {'✅' if HAS_GROQ and GROQ_KEY else '❌ (أضف GROQ_KEY)'}")
     print(f"   ta library: {'✅' if HAS_TA else '⚠️ (built-in indicators)'}")
 
     app = (ApplicationBuilder()
