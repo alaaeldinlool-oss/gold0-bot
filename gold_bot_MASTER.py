@@ -1769,7 +1769,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def auto_hourly_signal(context):
     """تنبيه تلقائي كل ساعة بالسعر والإشارة"""
-    if not REPORT_CHAT_IDS:
+    if not alert_subscribers:
         return
     try:
         price = get_price_cached()
@@ -1796,7 +1796,7 @@ async def auto_hourly_signal(context):
             f"RSI: {rsi:.1f}\n\n"
             f"TP1: `{tp1:.3f}` · SL: `{sl:.3f}`"
         )
-        for chat_id in REPORT_CHAT_IDS:
+        for chat_id in list(alert_subscribers):
             await context.bot.send_message(
                 chat_id=chat_id, text=text,
                 parse_mode=ParseMode.MARKDOWN,
@@ -1808,7 +1808,7 @@ async def auto_hourly_signal(context):
 
 async def check_strong_signal(context):
     """تنبيه فوري عند إشارة قوية جداً (BUY/SELL >= 9/12)"""
-    if not REPORT_CHAT_IDS:
+    if not alert_subscribers:
         return
     try:
         price = get_price()
@@ -1855,7 +1855,7 @@ async def check_strong_signal(context):
             f"🛑 SL:  `{sl:.3f}`\n\n"
             f"⚡ *ادخل الآن أو لا تدخل!*"
         )
-        for chat_id in REPORT_CHAT_IDS:
+        for chat_id in list(alert_subscribers):
             # Send with notification sound (default Telegram behavior)
             await context.bot.send_message(
                 chat_id=chat_id, text=text,
@@ -1870,7 +1870,7 @@ async def check_strong_signal(context):
 
 async def check_level_break(context):
     """تنبيه عند كسر مستوى Pivot أو EMA مهم"""
-    if not REPORT_CHAT_IDS:
+    if not alert_subscribers:
         return
     try:
         price = get_price_cached()
@@ -1911,7 +1911,7 @@ async def check_level_break(context):
                 f"💰 السعر: *{fmt_price(price)}*\n\n" +
                 "\n".join(alerts_to_send)
             )
-            for chat_id in REPORT_CHAT_IDS:
+            for chat_id in list(alert_subscribers):
                 await context.bot.send_message(
                     chat_id=chat_id, text=text,
                     parse_mode=ParseMode.MARKDOWN,
