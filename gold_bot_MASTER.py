@@ -61,10 +61,10 @@ try:
 except ImportError:
     HAS_CLAUDE = False
 
-from telegram import Update, Bot
+from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, ContextTypes,
-    JobQueue
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
+    ContextTypes, JobQueue
 )
 from telegram.constants import ParseMode
 
@@ -746,25 +746,282 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
 #  COMMAND HANDLERS
 # ════════════════════════════════════════════════════════════════
 
+
+# ════════════════════════════════════════════════════════════════
+#  INLINE KEYBOARD — يظهر بعد كل رد تلقائياً
+# ════════════════════════════════════════════════════════════════
+
+def main_keyboard():
+    """الكيبورد الرئيسي — يظهر دايماً أسفل كل رسالة"""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💰 السعر",      callback_data="price"),
+            InlineKeyboardButton("📊 تحليل 1m",   callback_data="analysis_1m"),
+            InlineKeyboardButton("📊 تحليل 5m",   callback_data="analysis_5m"),
+        ],
+        [
+            InlineKeyboardButton("🎯 إشارة",       callback_data="trade"),
+            InlineKeyboardButton("⏱ MTF",          callback_data="mtf"),
+            InlineKeyboardButton("📈 تقرير",        callback_data="report"),
+        ],
+        [
+            InlineKeyboardButton("📌 Pivots",       callback_data="pivots"),
+            InlineKeyboardButton("🌀 Fibonacci",    callback_data="fib"),
+            InlineKeyboardButton("⚡ SMC",           callback_data="smc"),
+        ],
+        [
+            InlineKeyboardButton("🔔 تنبيهات ON/OFF", callback_data="alert"),
+            InlineKeyboardButton("📋 قائمة التنبيهات",callback_data="alerts"),
+        ],
+        [
+            InlineKeyboardButton("🤖 AI تحليل",    callback_data="ai"),
+            InlineKeyboardButton("❓ مساعدة",       callback_data="help"),
+        ],
+    ])
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالج ضغط الأزرار"""
+    query = update.callback_query
+    await query.answer()  # يوقف الـ loading على الزر
+
+    data = query.data
+
+    # نعمل fake update عشان نعيد استخدام نفس الـ handlers
+    if data == "price":
+        price = get_price()
+        if price:
+            text = (f"🥇 *GOLD / USD*\n💰 *{fmt_price(price)}*\n"
+                    f"🕐 {datetime.now().strftime('%H:%M:%S')}")
+        else:
+            text = "❌ فشل جلب السعر. تحقق من API Key."
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
+    elif data in ("analysis_1m", "analysis_5m"):
+        tf_arg = "1m" if data == "analysis_1m" else "5m"
+        tf_cfg = TIMEFRAMES.get(tf_arg, TIMEFRAMES["1m"])
+        await query.edit_message_text(f"⏳ جاري التحليل على {tf_arg}...",
+                                       reply_markup=main_keyboard())
+        d = fetch_ohlcv(tf_cfg["interval"], tf_cfg["outputsize"])
+        if not d:
+            text = "❌ فشل جلب البيانات."
+        else:
+            sig = full_analysis(d)
+            text = fmt_analysis_msg(sig, tf_arg)
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
+    elif data == "trade":
+        await query.edit_message_text("⏳ جاري حساب الإشارة...",
+                                       reply_markup=main_keyboard())
+        d = fetch_ohlcv("5min", 200)
+        if not d:
+            text = "❌ فشل جلب البيانات."
+        else:
+            sig  = full_analysis(d)
+            atr  = sig.get("ATR", 0)
+            price= sig.get("price", 0)
+            dire = sig.get("direction", "NEUTRAL")
+            bs   = sig.get("buy_score", 0)
+            ss   = sig.get("sell_score", 0)
+            tp1  = price + atr*1.5 if dire == "BULLISH" else price - atr*1.5
+            tp2  = price + atr*3   if dire == "BULLISH" else price - atr*3
+            sl   = price - atr     if dire == "BULLISH" else price + atr
+            icon = "🟢" if dire == "BULLISH" else "🔴" if dire == "BEARISH" else "🟡"
+            text = (f"{icon} *إشارة التداول*\n\n"
+                    f"الاتجاه: *{dire}*\n"
+                    f"السعر: *{fmt_price(price)}*\n\n"
+                    f"TP1: `{tp1:.3f}`\n"
+                    f"TP2: `{tp2:.3f}`\n"
+                    f"SL:  `{sl:.3f}`\n\n"
+                    f"BUY {bs}/12 · SELL {ss}/12")
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
+    elif data == "mtf":
+        await query.edit_message_text("⏳ جاري تحليل Multi-Timeframe...",
+                                       reply_markup=main_keyboard())
+        lines = ["📊 *MULTI-TIMEFRAME ANALYSIS*\n"]
+        for tf_name, tf_cfg in TIMEFRAMES.items():
+            d = fetch_ohlcv(tf_cfg["interval"], tf_cfg["outputsize"])
+            if d:
+                sig  = full_analysis(d)
+                dire = sig.get("direction","?")
+                bs   = sig.get("buy_score",0)
+                ss   = sig.get("sell_score",0)
+                icon = "🟢" if dire=="BULLISH" else "🔴" if dire=="BEARISH" else "🟡"
+                lines.append(f"{icon} *{tf_name}* — {dire} · BUY {bs} SELL {ss}")
+        await query.edit_message_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
+    elif data == "pivots":
+        await query.edit_message_text("⏳ جاري حساب Pivot Points...",
+                                       reply_markup=main_keyboard())
+        d = fetch_ohlcv("1day", 10)
+        if not d:
+            text = "❌ فشل جلب البيانات."
+        else:
+            H = max(c["high"] for c in d[-5:])
+            L = min(c["low"]  for c in d[-5:])
+            C = d[-1]["close"]
+            PP = (H+L+C)/3
+            R1,R2,R3 = 2*PP-L, PP+(H-L), H+2*(PP-L)
+            S1,S2,S3 = 2*PP-H, PP-(H-L), L-2*(H-PP)
+            rng  = H - L
+            f382 = H - rng*0.382
+            f500 = H - rng*0.500
+            f618 = H - rng*0.618
+            text = (f"📌 *PIVOT POINTS*\n\n"
+                    f"R3: `{R3:.3f}`\nR2: `{R2:.3f}`\nR1: `{R1:.3f}`\n"
+                    f"PP: `{PP:.3f}` ←\n"
+                    f"S1: `{S1:.3f}`\nS2: `{S2:.3f}`\nS3: `{S3:.3f}`\n\n"
+                    f"📐 *Fibonacci*\n"
+                    f"38.2%: `{f382:.3f}`\n50%: `{f500:.3f}`\n61.8%: `{f618:.3f}`")
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
+    elif data == "fib":
+        await query.edit_message_text("⏳ جاري حساب Fibonacci...",
+                                       reply_markup=main_keyboard())
+        d = fetch_ohlcv("1day", 60)
+        if not d:
+            text = "❌ فشل جلب البيانات."
+        else:
+            H   = max(c["high"]  for c in d)
+            L   = min(c["low"]   for c in d)
+            rng = H - L
+            text = (f"📐 *FIBONACCI RETRACEMENT*\n\nHigh: `{H:.3f}` Low: `{L:.3f}`\n\n"
+                    f"0%:    `{H:.3f}`\n"
+                    f"23.6%: `{H-rng*.236:.3f}`\n"
+                    f"38.2%: `{H-rng*.382:.3f}` 🔑\n"
+                    f"50%:   `{H-rng*.5:.3f}` 🔑\n"
+                    f"61.8%: `{H-rng*.618:.3f}` 🥇\n"
+                    f"78.6%: `{H-rng*.786:.3f}`\n"
+                    f"100%:  `{L:.3f}`\n\n"
+                    f"Ext 127.2%: `{L-rng*.272:.3f}`\n"
+                    f"Ext 161.8%: `{L-rng*.618:.3f}`")
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
+    elif data == "smc":
+        await query.edit_message_text("⏳ جاري تحليل Smart Money...",
+                                       reply_markup=main_keyboard())
+        d = fetch_ohlcv("1h", 100)
+        if not d:
+            text = "❌ فشل جلب البيانات."
+        else:
+            sig  = full_analysis(d)
+            obs  = sig.get("order_blocks", [])
+            fvgs = sig.get("fvgs", [])
+            lines = ["⚡ *SMART MONEY CONCEPTS*\n"]
+            if obs:
+                lines.append("📦 *Order Blocks:*")
+                for ob in obs[-3:]:
+                    lines.append(f"  {'🟦' if ob.get('type')=='BULL_OB' else '🟥'} {ob.get('label','OB')}: `{ob.get('bottom',0):.3f}` — `{ob.get('top',0):.3f}`")
+            if fvgs:
+                lines.append("\n⬜ *Fair Value Gaps:*")
+                for fvg in fvgs[-3:]:
+                    lines.append(f"  {'⬆️' if fvg.get('type')=='BULL' else '⬇️'} {fvg.get('label','FVG')}: `{fvg.get('bottom',0):.3f}` — `{fvg.get('top',0):.3f}`")
+            if not obs and not fvgs:
+                lines.append("لا أنماط SMC واضحة حالياً")
+            text = "\n".join(lines)
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
+    elif data == "report":
+        await query.edit_message_text("⏳ جاري إعداد التقرير الشامل...",
+                                       reply_markup=main_keyboard())
+        price = get_price()
+        d     = fetch_ohlcv("5min", 200)
+        if not d or not price:
+            text = "❌ فشل جلب البيانات."
+        else:
+            sig  = full_analysis(d)
+            dire = sig.get("direction","NEUTRAL")
+            bs   = sig.get("buy_score",0)
+            ss   = sig.get("sell_score",0)
+            rsi  = sig.get("RSI",50)
+            atr  = sig.get("ATR",0)
+            icon = "🟢" if dire=="BULLISH" else "🔴" if dire=="BEARISH" else "🟡"
+            text = (f"📈 *GOLD MASTER REPORT*\n"
+                    f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                    f"💰 السعر: *{fmt_price(price)}*\n"
+                    f"{icon} الاتجاه: *{dire}*\n\n"
+                    f"BUY Score:  {bs}/12\n"
+                    f"SELL Score: {ss}/12\n"
+                    f"RSI: {rsi:.1f}\n"
+                    f"ATR: {atr:.3f}\n\n"
+                    f"{fmt_analysis_msg(sig,'5m')}")
+        await query.edit_message_text(text[:4000], parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
+    elif data == "alert":
+        global alerts_enabled
+        alerts_enabled = not alerts_enabled
+        status = "🟢 مفعّل" if alerts_enabled else "🔴 متوقف"
+        text = f"🔔 *التنبيهات التلقائية*\nالحالة: {status}"
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
+    elif data == "alerts":
+        if not price_alerts:
+            text = "📋 لا يوجد تنبيهات مضافة\n\nأضف تنبيه: /setalert 3100 above سبب"
+        else:
+            lines = ["📋 *التنبيهات النشطة:*\n"]
+            for a in price_alerts:
+                icon = "↑" if a["type"]=="above" else "↓"
+                done = "✅" if a.get("triggered") else "⏳"
+                lines.append(f"{done} {icon} `{a['price']:.3f}` — {a.get('label','')}")
+            text = "\n".join(lines)
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
+    elif data == "ai":
+        if not HAS_CLAUDE or not CLAUDE_KEY:
+            text = ("🤖 *Claude AI*\n\n"
+                    "❌ غير مفعّل\n"
+                    "أضف CLAUDE_KEY في Environment Variables")
+        else:
+            await query.edit_message_text("⏳ جاري التحليل بالذكاء الاصطناعي...",
+                                           reply_markup=main_keyboard())
+            price = get_price()
+            d     = fetch_ohlcv("5min", 200)
+            sig   = full_analysis(d) if d else {}
+            text  = await get_claude_analysis(price, sig)
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
+    elif data == "help":
+        text = (
+            "❓ *GOLD MASTER BOT — المساعدة*\n\n"
+            "اضغط على أي زر أسفل الرسالة 👇\n\n"
+            "💰 *السعر* — السعر الحالي للذهب\n"
+            "📊 *تحليل* — تحليل فني كامل\n"
+            "🎯 *إشارة* — BUY/SELL مع TP وSL\n"
+            "⏱ *MTF* — تحليل 4 Timeframes\n"
+            "📌 *Pivots* — مستويات الدعم والمقاومة\n"
+            "🌀 *Fibonacci* — مستويات الفيبوناتشي\n"
+            "⚡ *SMC* — Order Blocks وFVG\n"
+            "📈 *تقرير* — تقرير شامل\n"
+            "🔔 *تنبيهات* — تفعيل/تعطيل التنبيهات\n"
+            "🤖 *AI* — تحليل بالذكاء الاصطناعي\n\n"
+            "لإضافة تنبيه:\n"
+            "`/setalert 3100 above سبب`"
+        )
+        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "🥇 *GOLD MASTER BOT*\n\n"
+        "🥇 *GOLD MASTER BOT*\n"
         "بوت تحليل الذهب الاحترافي\n\n"
-        "الأوامر:\n"
-        "/price — السعر الحالي\n"
-        "/analysis — تحليل كامل (1min)\n"
-        "/trade — إشارة تداول\n"
-        "/mtf — Multi-Timeframe\n"
-        "/pivots — Pivot Points + Fibonacci\n"
-        "/smc — Smart Money Concepts\n"
-        "/report — تقرير شامل\n"
-        "/alert — تفعيل التنبيهات التلقائية\n"
-        "/setalert 3100 above سبب — تنبيه عند مستوى\n"
-        "/alerts — قائمة التنبيهات\n"
-        "/ai — تحليل بالذكاء الاصطناعي\n"
-        "/help — المساعدة\n"
+        "اضغط على أي زر أسفل 👇"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_keyboard()
+    )
 
 async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ جاري جلب السعر...")
@@ -773,10 +1030,14 @@ async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🥇 *GOLD / USD*\n💰 *{fmt_price(price)}*\n"
             f"🕐 {datetime.now().strftime('%H:%M:%S')}",
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_keyboard()
         )
     else:
-        await update.message.reply_text("❌ فشل جلب السعر. تحقق من API Key.")
+        await update.message.reply_text(
+            "❌ فشل جلب السعر. تحقق من API Key.",
+            reply_markup=main_keyboard()
+        )
 
 async def cmd_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tf_arg = context.args[0] if context.args else '1m'
@@ -791,7 +1052,8 @@ async def cmd_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sig = full_analysis(d)
     await update.message.reply_text(
         fmt_analysis_msg(sig, tf_arg),
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_keyboard()
     )
 
 async def cmd_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -964,21 +1226,14 @@ def main():
     app.add_handler(CommandHandler("alerts",    cmd_alerts_list))
     app.add_handler(CommandHandler("ai",        cmd_ai))
     app.add_handler(CommandHandler("help",      cmd_help))
+    app.add_handler(CallbackQueryHandler(handle_callback))
 
     # Jobs — async (no threading issues)
-    jq = app.job_queue
-    if jq is not None:
-        jq.run_repeating(check_and_send_alerts, interval=60, first=10)
-        # Daily report at 07:00 and 20:00 UTC
-        try:
-            from datetime import time as dtime
-            jq.run_daily(send_daily_report, time=dtime(7, 0))
-            jq.run_daily(send_daily_report, time=dtime(20, 0))
-        except Exception as e:
-            log.warning(f"Daily jobs not scheduled: {e}")
-    else:
-        log.warning("⚠️ JobQueue not available — install with: pip install \"python-telegram-bot[job-queue]\"")
-        log.warning("   Alerts and daily reports disabled. Bot commands still work.")
+    jq: JobQueue = app.job_queue
+    jq.run_repeating(check_and_send_alerts, interval=60, first=10)
+    # Daily report at 07:00 and 20:00 UTC
+    jq.run_daily(send_daily_report, time=datetime.strptime("07:00","  %H:%M").time())
+    jq.run_daily(send_daily_report, time=datetime.strptime("20:00","%H:%M").time())
 
     print("✅ Bot is running! Press Ctrl+C to stop.")
     app.run_polling(drop_pending_updates=True)
