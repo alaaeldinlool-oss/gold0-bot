@@ -1,6 +1,7 @@
 services:
-  - type: worker
-    name: gold-bot
+  - type: web
+    name: gold0-bot
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python gold_bot_MASTER.py
+    healthCheckPath: /
