@@ -672,7 +672,7 @@ EMA Stack: {'صاعدة' if sig['ema_bull'] else 'هابطة' if sig['ema_bear']
 3. توصية واضحة (شراء/بيع/انتظار) مع السبب"""
 
         msg = client.messages.create(
-            model='claude-sonnet-4-20250514',
+            model='claude-sonnet-4-6',
             max_tokens=400,
             messages=[{'role': 'user', 'content': prompt}]
         )
@@ -883,7 +883,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 d = fetch_ohlcv("5min", 24)
                 if d:
-                    closes = [c["close"] for c in d[-20:]]
+                    closes = d["close"][-20:]
                     chart_str = "\n\n" + make_ascii_chart(closes)
             except:
                 pass
@@ -922,8 +922,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             atr  = sig.get("ATR", 0)
             price= sig.get("price", 0)
             dire = sig.get("direction", "NEUTRAL")
-            bs   = sig.get("buy_score", 0)
-            ss   = sig.get("sell_score", 0)
+            bs   = sig.get("buyScore", 0)
+            ss   = sig.get("sellScore", 0)
             tp1  = price + atr*1.5 if dire == "BULLISH" else price - atr*1.5
             tp2  = price + atr*3   if dire == "BULLISH" else price - atr*3
             sl   = price - atr     if dire == "BULLISH" else price + atr
@@ -947,8 +947,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if d:
                 sig  = full_analysis(d)
                 dire = sig.get("direction","?")
-                bs   = sig.get("buy_score",0)
-                ss   = sig.get("sell_score",0)
+                bs   = sig.get("buyScore",0)
+                ss   = sig.get("sellScore",0)
                 icon = "🟢" if dire=="BULLISH" else "🔴" if dire=="BEARISH" else "🟡"
                 lines.append(f"{icon} *{tf_name}* — {dire} · BUY {bs} SELL {ss}")
         await query.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN,
@@ -1044,8 +1044,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             sig  = full_analysis(d)
             dire = sig.get("direction","NEUTRAL")
-            bs   = sig.get("buy_score",0)
-            ss   = sig.get("sell_score",0)
+            bs   = sig.get("buyScore",0)
+            ss   = sig.get("sellScore",0)
             rsi  = sig.get("RSI",50)
             atr  = sig.get("ATR",0)
             icon = "🟢" if dire=="BULLISH" else "🔴" if dire=="BEARISH" else "🟡"
@@ -1062,9 +1062,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        reply_markup=main_keyboard())
 
     elif data == "alert":
-        global alerts_enabled
-        alerts_enabled = not alerts_enabled
-        status = "🟢 مفعّل" if alerts_enabled else "🔴 متوقف"
+        chat_id = query.message.chat_id
+        if chat_id in alert_subscribers:
+            alert_subscribers.discard(chat_id)
+            status = "🔴 متوقف"
+        else:
+            alert_subscribers.add(chat_id)
+            status = "🟢 مفعّل"
         text = (f"🔔 *التنبيهات التلقائية*\n"
                 f"الحالة: {status}\n\n"
                 f"لإضافة تنبيه عند مستوى معين:\n"
@@ -1074,7 +1078,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "alerts":
         chat_id = query.message.chat_id
-        user_alerts = alerts.get(chat_id, []) if isinstance(alerts, dict) else alerts
+        user_alerts = level_alerts.get(chat_id, [])
         if not user_alerts:
             text = "📋 لا يوجد تنبيهات مضافة\n\nأضف تنبيه: /setalert 3100 above سبب"
         else:
@@ -1232,6 +1236,37 @@ async def cmd_pivots(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fmt_pivots_msg(pv, fib, C), parse_mode=ParseMode.MARKDOWN
     )
 
+async def cmd_fib(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⏳ جاري حساب Fibonacci...")
+    d = fetch_ohlcv('1day', 60)
+    if not d:
+        await update.message.reply_text("❌ فشل جلب البيانات.")
+        return
+    H   = max(d['high'])
+    L   = min(d['low'])
+    C   = d['close'][-1]
+    fib = calc_fibonacci(H, L)
+    rng = H - L
+    retrace = ((H - C) / rng * 100) if rng > 0 else 0
+    f = lambda v: f"{v:,.3f}"
+    lines = [
+        "📐 *FIBONACCI RETRACEMENT*",
+        f"High: `{H:.3f}` · Low: `{L:.3f}`",
+        f"الآن: `{C:.3f}` ({retrace:.1f}% retrace)",
+        "",
+        f"0%:    `{fib['0%']:.3f}`",
+        f"23.6%: `{fib['23.6%']:.3f}`",
+        f"38.2%: `{fib['38.2%']:.3f}`",
+        f"50%:   `{fib['50%']:.3f}`",
+        f"61.8% 🥇: `{fib['61.8%']:.3f}`",
+        f"78.6%: `{fib['78.6%']:.3f}`",
+        f"100%:  `{fib['100%']:.3f}`",
+    ]
+    await update.message.reply_text(
+        '\n'.join(lines), parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_keyboard()
+    )
+
 async def cmd_smc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ جاري تحليل Smart Money...")
     d = fetch_ohlcv('1h', 200)
@@ -1337,8 +1372,8 @@ async def auto_hourly_signal(context):
             return
         sig  = full_analysis(d)
         dire = sig.get("direction", "NEUTRAL")
-        bs   = sig.get("buy_score", 0)
-        ss   = sig.get("sell_score", 0)
+        bs   = sig.get("buyScore", 0)
+        ss   = sig.get("sellScore", 0)
         rsi  = sig.get("RSI", 50)
         atr  = sig.get("ATR", 0)
         icon = "🟢" if dire == "BULLISH" else "🔴" if dire == "BEARISH" else "🟡"
@@ -1375,8 +1410,8 @@ async def check_strong_signal(context):
         if not price or not d:
             return
         sig = full_analysis(d)
-        bs  = sig.get("buy_score", 0)
-        ss  = sig.get("sell_score", 0)
+        bs  = sig.get("buyScore", 0)
+        ss  = sig.get("sellScore", 0)
         dire= sig.get("direction", "NEUTRAL")
         atr = sig.get("ATR", 0)
 
@@ -1435,9 +1470,9 @@ async def check_level_break(context):
         if not price or not d:
             return
 
-        H = max(c["high"] for c in d[-5:])
-        L = min(c["low"]  for c in d[-5:])
-        C = d[-1]["close"]
+        H = max(d["high"][-5:])
+        L = min(d["low"][-5:])
+        C = d["close"][-1]
         PP = (H+L+C)/3
         R1 = 2*PP - L
         S1 = 2*PP - H
@@ -1501,6 +1536,7 @@ def main():
     app.add_handler(CommandHandler("trade",     cmd_trade))
     app.add_handler(CommandHandler("mtf",       cmd_mtf))
     app.add_handler(CommandHandler("pivots",    cmd_pivots))
+    app.add_handler(CommandHandler("fib",       cmd_fib))
     app.add_handler(CommandHandler("smc",       cmd_smc))
     app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CommandHandler("alert",     cmd_alert))
