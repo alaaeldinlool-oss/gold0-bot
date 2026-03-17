@@ -40,6 +40,7 @@ import os
 import logging
 import asyncio
 import time
+import threading
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -94,6 +95,29 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 log = logging.getLogger(__name__)
+
+# ════════════════════════════════════════════════════════════════
+#  KEEP-ALIVE — يمنع Render من إيقاف البوت
+# ════════════════════════════════════════════════════════════════
+def keep_alive():
+    """سيرفر صغير يخلي Render يظن في طلبات دايماً"""
+    try:
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'Gold Bot is alive!')
+            def log_message(self, *args): pass  # اخفي الـ logs
+        port = int(os.environ.get('PORT', 8080))
+        server = HTTPServer(('0.0.0.0', port), Handler)
+        log.info(f'Keep-alive server on port {port}')
+        server.serve_forever()
+    except Exception as e:
+        log.warning(f'Keep-alive failed: {e}')
+
+# شغّل الـ keep-alive في thread منفصل
+threading.Thread(target=keep_alive, daemon=True).start()
 
 # ════════════════════════════════════════════════════════════════
 #  STATE
@@ -779,6 +803,32 @@ def main_keyboard():
         ],
     ])
 
+
+def make_ascii_chart(prices, width=20, height=6):
+    """رسم شارت نصي بسيط داخل Telegram"""
+    if not prices or len(prices) < 2:
+        return ""
+    mn, mx = min(prices), max(prices)
+    if mx == mn:
+        return ""
+    rng = mx - mn
+    rows = []
+    for row in range(height):
+        threshold = mx - (rng * row / (height-1))
+        line = ""
+        for p in prices[-width:]:
+            if abs(p - threshold) <= rng / (height * 2):
+                line += "●"
+            elif p >= threshold:
+                line += "│"
+            else:
+                line += " "
+        rows.append(f"`{threshold:>8.1f}` {line}")
+    # Add trend arrow
+    trend = "↗" if prices[-1] > prices[0] else "↘" if prices[-1] < prices[0] else "→"
+    rows.append(f"         {'▔'*width} {trend}")
+    return "\n".join(rows)
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج ضغط الأزرار"""
     query = update.callback_query
@@ -790,17 +840,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "price":
         price = get_price()
         if price:
-            text = (f"🥇 *GOLD / USD*\n💰 *{fmt_price(price)}*\n"
-                    f"🕐 {datetime.now().strftime('%H:%M:%S')}")
+            # Try to get recent prices for mini chart
+            chart_str = ""
+            try:
+                d = fetch_ohlcv("5min", 24)
+                if d:
+                    closes = [c["close"] for c in d[-20:]]
+                    chart_str = "\n\n" + make_ascii_chart(closes)
+            except:
+                pass
+            chg_icon = "📈" if price > (price * 0.999) else "📉"
+            text = (f"🥇 *GOLD / USD*\n"
+                    f"💰 *{fmt_price(price)}*\n"
+                    f"🕐 {datetime.now().strftime('%H:%M:%S')} UTC"
+                    f"{chart_str}")
         else:
             text = "❌ فشل جلب السعر. تحقق من API Key."
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
     elif data in ("analysis_1m", "analysis_5m"):
         tf_arg = "1m" if data == "analysis_1m" else "5m"
         tf_cfg = TIMEFRAMES.get(tf_arg, TIMEFRAMES["1m"])
-        await query.edit_message_text(f"⏳ جاري التحليل على {tf_arg}...",
+        await query.message.reply_text(f"⏳ جاري التحليل على {tf_arg}...",
                                        reply_markup=main_keyboard())
         d = fetch_ohlcv(tf_cfg["interval"], tf_cfg["outputsize"])
         if not d:
@@ -808,11 +870,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             sig = full_analysis(d)
             text = fmt_analysis_msg(sig, tf_arg)
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
     elif data == "trade":
-        await query.edit_message_text("⏳ جاري حساب الإشارة...",
+        await query.message.reply_text("⏳ جاري حساب الإشارة...",
                                        reply_markup=main_keyboard())
         d = fetch_ohlcv("5min", 200)
         if not d:
@@ -835,11 +897,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"TP2: `{tp2:.3f}`\n"
                     f"SL:  `{sl:.3f}`\n\n"
                     f"BUY {bs}/12 · SELL {ss}/12")
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
     elif data == "mtf":
-        await query.edit_message_text("⏳ جاري تحليل Multi-Timeframe...",
+        await query.message.reply_text("⏳ جاري تحليل Multi-Timeframe...",
                                        reply_markup=main_keyboard())
         lines = ["📊 *MULTI-TIMEFRAME ANALYSIS*\n"]
         for tf_name, tf_cfg in TIMEFRAMES.items():
@@ -851,11 +913,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ss   = sig.get("sell_score",0)
                 icon = "🟢" if dire=="BULLISH" else "🔴" if dire=="BEARISH" else "🟡"
                 lines.append(f"{icon} *{tf_name}* — {dire} · BUY {bs} SELL {ss}")
-        await query.edit_message_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
     elif data == "pivots":
-        await query.edit_message_text("⏳ جاري حساب Pivot Points...",
+        await query.message.reply_text("⏳ جاري حساب Pivot Points...",
                                        reply_markup=main_keyboard())
         d = fetch_ohlcv("1day", 10)
         if not d:
@@ -877,11 +939,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"S1: `{S1:.3f}`\nS2: `{S2:.3f}`\nS3: `{S3:.3f}`\n\n"
                     f"📐 *Fibonacci*\n"
                     f"38.2%: `{f382:.3f}`\n50%: `{f500:.3f}`\n61.8%: `{f618:.3f}`")
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
     elif data == "fib":
-        await query.edit_message_text("⏳ جاري حساب Fibonacci...",
+        await query.message.reply_text("⏳ جاري حساب Fibonacci...",
                                        reply_markup=main_keyboard())
         d = fetch_ohlcv("1day", 60)
         if not d:
@@ -900,11 +962,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"100%:  `{L:.3f}`\n\n"
                     f"Ext 127.2%: `{L-rng*.272:.3f}`\n"
                     f"Ext 161.8%: `{L-rng*.618:.3f}`")
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
     elif data == "smc":
-        await query.edit_message_text("⏳ جاري تحليل Smart Money...",
+        await query.message.reply_text("⏳ جاري تحليل Smart Money...",
                                        reply_markup=main_keyboard())
         d = fetch_ohlcv("1h", 100)
         if not d:
@@ -925,11 +987,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not obs and not fvgs:
                 lines.append("لا أنماط SMC واضحة حالياً")
             text = "\n".join(lines)
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
     elif data == "report":
-        await query.edit_message_text("⏳ جاري إعداد التقرير الشامل...",
+        await query.message.reply_text("⏳ جاري إعداد التقرير الشامل...",
                                        reply_markup=main_keyboard())
         price = get_price()
         d     = fetch_ohlcv("5min", 200)
@@ -952,7 +1014,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"RSI: {rsi:.1f}\n"
                     f"ATR: {atr:.3f}\n\n"
                     f"{fmt_analysis_msg(sig,'5m')}")
-        await query.edit_message_text(text[:4000], parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text[:4000], parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
     elif data == "alert":
@@ -960,7 +1022,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         alerts_enabled = not alerts_enabled
         status = "🟢 مفعّل" if alerts_enabled else "🔴 متوقف"
         text = f"🔔 *التنبيهات التلقائية*\nالحالة: {status}"
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
     elif data == "alerts":
@@ -973,7 +1035,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 done = "✅" if a.get("triggered") else "⏳"
                 lines.append(f"{done} {icon} `{a['price']:.3f}` — {a.get('label','')}")
             text = "\n".join(lines)
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
     elif data == "ai":
@@ -982,13 +1044,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "❌ غير مفعّل\n"
                     "أضف CLAUDE_KEY في Environment Variables")
         else:
-            await query.edit_message_text("⏳ جاري التحليل بالذكاء الاصطناعي...",
+            await query.message.reply_text("⏳ جاري التحليل بالذكاء الاصطناعي...",
                                            reply_markup=main_keyboard())
             price = get_price()
             d     = fetch_ohlcv("5min", 200)
             sig   = full_analysis(d) if d else {}
             text  = await get_claude_analysis(price, sig)
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
     elif data == "help":
@@ -1008,14 +1070,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "لإضافة تنبيه:\n"
             "`/setalert 3100 above سبب`"
         )
-        await query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    name = update.effective_user.first_name or "صديقي"
     text = (
-        "🥇 *GOLD MASTER BOT*\n"
-        "بوت تحليل الذهب الاحترافي\n\n"
-        "اضغط على أي زر أسفل 👇"
+        f"🥇 *GOLD MASTER BOT*\n"
+        f"أهلاً {name}! 👋\n\n"
+        f"💡 اضغط أي زر للحصول على تحليل فوري\n"
+        f"🔔 فعّل التنبيهات للحصول على إشارات تلقائية\n"
+        f"⚡ إشارات قوية تصلك فوراً بدون طلب\n\n"
+        f"اضغط على أي زر أسفل 👇"
     )
     await update.message.reply_text(
         text,
@@ -1196,6 +1262,162 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #  MAIN
 # ════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════
+#  AUTO SIGNALS & ALERTS
+# ════════════════════════════════════════════════════════════════
+
+async def auto_hourly_signal(context):
+    """تنبيه تلقائي كل ساعة بالسعر والإشارة"""
+    if not REPORT_CHAT_IDS:
+        return
+    try:
+        price = get_price()
+        d     = fetch_ohlcv("5min", 200)
+        if not price or not d:
+            return
+        sig  = full_analysis(d)
+        dire = sig.get("direction", "NEUTRAL")
+        bs   = sig.get("buy_score", 0)
+        ss   = sig.get("sell_score", 0)
+        rsi  = sig.get("RSI", 50)
+        atr  = sig.get("ATR", 0)
+        icon = "🟢" if dire == "BULLISH" else "🔴" if dire == "BEARISH" else "🟡"
+
+        tp1 = price + atr*1.5 if dire == "BULLISH" else price - atr*1.5
+        sl  = price - atr     if dire == "BULLISH" else price + atr
+
+        text = (
+            f"{icon} *تحديث ساعي — GOLD*\n"
+            f"🕐 {datetime.now().strftime('%H:%M')} UTC\n\n"
+            f"💰 السعر: *{fmt_price(price)}*\n"
+            f"📊 الاتجاه: *{dire}*\n"
+            f"BUY {bs}/12 · SELL {ss}/12\n"
+            f"RSI: {rsi:.1f}\n\n"
+            f"TP1: `{tp1:.3f}` · SL: `{sl:.3f}`"
+        )
+        for chat_id in REPORT_CHAT_IDS:
+            await context.bot.send_message(
+                chat_id=chat_id, text=text,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=main_keyboard()
+            )
+    except Exception as e:
+        log.error(f"auto_hourly_signal error: {e}")
+
+
+async def check_strong_signal(context):
+    """تنبيه فوري عند إشارة قوية جداً (BUY/SELL >= 9/12)"""
+    if not REPORT_CHAT_IDS:
+        return
+    try:
+        price = get_price()
+        d     = fetch_ohlcv("5min", 200)
+        if not price or not d:
+            return
+        sig = full_analysis(d)
+        bs  = sig.get("buy_score", 0)
+        ss  = sig.get("sell_score", 0)
+        dire= sig.get("direction", "NEUTRAL")
+        atr = sig.get("ATR", 0)
+
+        # Only alert on very strong signals
+        if bs < 9 and ss < 9:
+            return
+
+        # Avoid duplicate alerts (check last alert time)
+        now = time.time()
+        last = getattr(check_strong_signal, '_last_alert', 0)
+        if now - last < 1800:  # Don't repeat within 30 min
+            return
+        check_strong_signal._last_alert = now
+
+        if bs >= 9:
+            icon = "🚀🟢"
+            signal_txt = f"إشارة شراء قوية جداً! ({bs}/12)"
+            tp1 = price + atr*1.5
+            tp2 = price + atr*3
+            sl  = price - atr
+        else:
+            icon = "⚡🔴"
+            signal_txt = f"إشارة بيع قوية جداً! ({ss}/12)"
+            tp1 = price - atr*1.5
+            tp2 = price - atr*3
+            sl  = price + atr
+
+        text = (
+            f"{icon} *تنبيه إشارة قوية!*\n"
+            f"⏰ {datetime.now().strftime('%H:%M:%S')} UTC\n\n"
+            f"💰 السعر: *{fmt_price(price)}*\n"
+            f"📢 {signal_txt}\n\n"
+            f"🎯 TP1: `{tp1:.3f}`\n"
+            f"🎯 TP2: `{tp2:.3f}`\n"
+            f"🛑 SL:  `{sl:.3f}`\n\n"
+            f"⚡ *ادخل الآن أو لا تدخل!*"
+        )
+        for chat_id in REPORT_CHAT_IDS:
+            # Send with notification sound (default Telegram behavior)
+            await context.bot.send_message(
+                chat_id=chat_id, text=text,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=main_keyboard()
+            )
+    except Exception as e:
+        log.error(f"check_strong_signal error: {e}")
+
+
+async def check_level_break(context):
+    """تنبيه عند كسر مستوى Pivot أو EMA مهم"""
+    if not REPORT_CHAT_IDS:
+        return
+    try:
+        price = get_price()
+        d     = fetch_ohlcv("1day", 10)
+        if not price or not d:
+            return
+
+        H = max(c["high"] for c in d[-5:])
+        L = min(c["low"]  for c in d[-5:])
+        C = d[-1]["close"]
+        PP = (H+L+C)/3
+        R1 = 2*PP - L
+        S1 = 2*PP - H
+
+        # Check for level breaks
+        last_price = getattr(check_level_break, '_last_price', price)
+        check_level_break._last_price = price
+
+        alerts_to_send = []
+
+        # Pivot PP break
+        if last_price < PP <= price:
+            alerts_to_send.append(f"📌 كسر فوق Pivot PP: `{PP:.3f}`")
+        elif last_price > PP >= price:
+            alerts_to_send.append(f"📌 كسر تحت Pivot PP: `{PP:.3f}`")
+
+        # R1 break (bullish)
+        if last_price < R1 <= price:
+            alerts_to_send.append(f"🚀 اختراق R1: `{R1:.3f}` — إشارة صاعدة قوية!")
+
+        # S1 break (bearish)
+        if last_price > S1 >= price:
+            alerts_to_send.append(f"⚠️ كسر S1: `{S1:.3f}` — إشارة هابطة!")
+
+        if alerts_to_send:
+            text = (
+                f"🔔 *تنبيه كسر مستوى!*\n"
+                f"💰 السعر: *{fmt_price(price)}*\n\n" +
+                "\n".join(alerts_to_send)
+            )
+            for chat_id in REPORT_CHAT_IDS:
+                await context.bot.send_message(
+                    chat_id=chat_id, text=text,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=main_keyboard()
+                )
+    except Exception as e:
+        log.error(f"check_level_break error: {e}")
+
+
 def main():
     if TELEGRAM_TOKEN == "YOUR_TELEGRAM_TOKEN_HERE":
         print("❌ أضف TELEGRAM_TOKEN في الكود أو كـ environment variable")
@@ -1232,6 +1454,12 @@ def main():
     jq = app.job_queue
     if jq is not None:
         jq.run_repeating(check_and_send_alerts, interval=60, first=10)
+        # Hourly auto-signal
+        jq.run_repeating(auto_hourly_signal, interval=3600, first=30)
+        # Strong signal check every 5 minutes
+        jq.run_repeating(check_strong_signal, interval=300, first=60)
+        # Level break check every 2 minutes
+        jq.run_repeating(check_level_break, interval=120, first=90)
         from datetime import time as dtime
         jq.run_daily(send_daily_report, time=dtime(7, 0))
         jq.run_daily(send_daily_report, time=dtime(20, 0))
