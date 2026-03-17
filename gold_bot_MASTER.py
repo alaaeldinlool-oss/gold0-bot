@@ -682,6 +682,174 @@ EMA Stack: {'صاعدة' if sig['ema_bull'] else 'هابطة' if sig['ema_bear']
         return f"⚠️ Groq error: {str(e)[:100]}"
 
 # ════════════════════════════════════════════════════════════════
+#  CHART GENERATOR — شارت احترافي بالصورة
+# ════════════════════════════════════════════════════════════════
+
+def generate_chart(d: dict, sig: dict, tf: str = '1H') -> Optional[bytes]:
+    """يرسم شارت كاندل مع EMA + دعم ومقاومة ويرجع bytes للصورة"""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')  # بدون GUI
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        from matplotlib.patches import FancyArrowPatch
+
+        closes = d['close'][-60:]
+        opens  = d['open'][-60:]
+        highs  = d['high'][-60:]
+        lows   = d['low'][-60:]
+        n = len(closes)
+        xs = list(range(n))
+
+        # حساب EMAs
+        ema20  = calc_ema(closes, 20)[-n:]
+        ema50  = calc_ema(closes, 50)[-n:]
+
+        # Pivot Points
+        H = max(highs); L = min(lows); C = closes[-1]
+        PP = (H + L + C) / 3
+        R1 = 2*PP - L;  R2 = PP + (H-L)
+        S1 = 2*PP - H;  S2 = PP - (H-L)
+
+        # ATR للـ TP/SL
+        atr  = sig.get('ATR', (H-L)*0.01)
+        price= sig.get('price', C)
+        dire = sig.get('direction', 'NEUTRAL')
+        tp1  = price + atr*1.5 if dire=='BULLISH' else price - atr*1.5
+        sl   = price - atr     if dire=='BULLISH' else price + atr
+
+        # ── رسم الشارت ──
+        fig, ax = plt.subplots(figsize=(12, 7))
+        fig.patch.set_facecolor('#0d1117')
+        ax.set_facecolor('#0d1117')
+
+        # كاندل ستيك
+        for i in xs:
+            o, c_, h, l = opens[i], closes[i], highs[i], lows[i]
+            color = '#26a69a' if c_ >= o else '#ef5350'
+            # الفتيل
+            ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=2)
+            # الجسم
+            body_h = abs(c_ - o)
+            body_y = min(o, c_)
+            rect = plt.Rectangle((i-0.35, body_y), 0.7,
+                                  max(body_h, atr*0.05),
+                                  color=color, zorder=3)
+            ax.add_patch(rect)
+
+        # EMA lines
+        ax.plot(xs, ema20, color='#f6c90e', linewidth=1.5,
+                label='EMA 20', zorder=4)
+        ax.plot(xs, ema50, color='#2196F3', linewidth=1.5,
+                label='EMA 50', zorder=4)
+
+        # خطوط المقاومة
+        ax.axhline(R1, color='#ef5350', linewidth=1.2, linestyle='--', alpha=0.8)
+        ax.axhline(R2, color='#ef5350', linewidth=0.8, linestyle=':', alpha=0.6)
+        ax.text(n+0.3, R1, f'R1 {R1:.1f}', color='#ef5350',
+                fontsize=8, va='center', fontweight='bold')
+        ax.text(n+0.3, R2, f'R2 {R2:.1f}', color='#ef5350',
+                fontsize=7, va='center', alpha=0.8)
+
+        # خطوط الدعم
+        ax.axhline(S1, color='#26a69a', linewidth=1.2, linestyle='--', alpha=0.8)
+        ax.axhline(S2, color='#26a69a', linewidth=0.8, linestyle=':', alpha=0.6)
+        ax.text(n+0.3, S1, f'S1 {S1:.1f}', color='#26a69a',
+                fontsize=8, va='center', fontweight='bold')
+        ax.text(n+0.3, S2, f'S2 {S2:.1f}', color='#26a69a',
+                fontsize=7, va='center', alpha=0.8)
+
+        # Pivot PP
+        ax.axhline(PP, color='#9c27b0', linewidth=1.0, linestyle='-', alpha=0.7)
+        ax.text(n+0.3, PP, f'PP {PP:.1f}', color='#9c27b0',
+                fontsize=8, va='center', fontweight='bold')
+
+        # TP و SL
+        if dire != 'NEUTRAL':
+            tp_color = '#26a69a' if dire=='BULLISH' else '#ef5350'
+            sl_color = '#ef5350' if dire=='BULLISH' else '#26a69a'
+            ax.axhline(tp1, color=tp_color, linewidth=1.2,
+                       linestyle='-.', alpha=0.9)
+            ax.axhline(sl,  color=sl_color, linewidth=1.2,
+                       linestyle='-.', alpha=0.9)
+            ax.text(0.5, tp1, f'TP {tp1:.1f}', color=tp_color,
+                    fontsize=8, va='bottom', fontweight='bold')
+            ax.text(0.5, sl,  f'SL {sl:.1f}',  color=sl_color,
+                    fontsize=8, va='top',    fontweight='bold')
+
+        # السعر الحالي
+        ax.axhline(price, color='#ffffff', linewidth=1.0,
+                   linestyle='-', alpha=0.5)
+        ax.text(n+0.3, price, f'{price:.2f}', color='#ffffff',
+                fontsize=9, va='center', fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.2', facecolor='#1f2937',
+                          edgecolor='white', alpha=0.8))
+
+        # تنسيق المحاور
+        ax.tick_params(colors='#8b949e', labelsize=8)
+        ax.spines[:].set_color('#30363d')
+        ax.yaxis.set_tick_params(labelright=True, labelleft=False)
+        ax.yaxis.tick_right()
+        ax.set_xlim(-1, n+4)
+
+        # عنوان
+        dir_ar = '🟢 BULLISH' if dire=='BULLISH' else '🔴 BEARISH' if dire=='BEARISH' else '🟡 NEUTRAL'
+        rsi_val = sig.get('RSI', 50)
+        bs  = sig.get('buyScore', 0)
+        ss  = sig.get('sellScore', 0)
+        ax.set_title(
+            f'GOLD / USD  [{tf}]   ${price:,.2f}   {dir_ar}\n'
+            f'RSI: {rsi_val:.1f}   BUY: {bs}/12   SELL: {ss}/12   '
+            f'{now_local().strftime("%Y-%m-%d %H:%M")} GMT+2',
+            color='white', fontsize=11, pad=10, fontweight='bold'
+        )
+
+        # Legend
+        ax.legend(loc='upper left', facecolor='#1f2937',
+                  edgecolor='#30363d', labelcolor='white', fontsize=8)
+
+        ax.grid(True, color='#21262d', linewidth=0.5, alpha=0.5)
+
+        # حفظ في الميموري
+        import io
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=130, bbox_inches='tight',
+                    facecolor='#0d1117')
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
+
+    except Exception as e:
+        log.error(f"generate_chart error: {e}")
+        return None
+
+
+async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """أمر /chart — يبعت صورة شارت احترافي"""
+    tf_arg = context.args[0] if context.args else '1h'
+    tf_cfg = TIMEFRAMES.get(tf_arg, TIMEFRAMES['1h'])
+    await update.message.reply_text(f"⏳ جاري رسم الشارت على {tf_arg}...")
+    d = fetch_ohlcv(tf_cfg['interval'], tf_cfg['outputsize'])
+    if not d:
+        await update.message.reply_text("❌ فشل جلب البيانات.")
+        return
+    sig = full_analysis(d)
+    img = generate_chart(d, sig, tf_arg.upper())
+    if img:
+        await update.message.reply_photo(
+            photo=img,
+            caption=(f"📊 *GOLD [{tf_arg.upper()}]*\n"
+                     f"💰 ${sig['price']:,.3f}\n"
+                     f"{'🟢 BULLISH' if sig['direction']=='BULLISH' else '🔴 BEARISH' if sig['direction']=='BEARISH' else '🟡 NEUTRAL'}\n"
+                     f"BUY {sig['buyScore']}/12 · SELL {sig['sellScore']}/12"),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_keyboard()
+        )
+    else:
+        await update.message.reply_text("❌ فشل رسم الشارت.")
+
+
+# ════════════════════════════════════════════════════════════════
 #  ALERT ENGINE
 # ════════════════════════════════════════════════════════════════
 
@@ -811,6 +979,7 @@ def main_keyboard():
         ],
         [
             InlineKeyboardButton("🤖 AI تحليل",    callback_data="ai"),
+            InlineKeyboardButton("📊 شارت",         callback_data="chart"),
             InlineKeyboardButton("❓ مساعدة",       callback_data="help"),
         ],
     ])
@@ -1128,6 +1297,30 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
+    elif data == "chart":
+        await query.message.reply_text("⏳ جاري رسم الشارت...",
+                                       reply_markup=main_keyboard())
+        d = fetch_ohlcv_cached("1h", 200)
+        if not d:
+            await query.message.reply_text("❌ فشل جلب البيانات.",
+                                           reply_markup=main_keyboard())
+        else:
+            sig = full_analysis(d)
+            img = generate_chart(d, sig, '1H')
+            if img:
+                await query.message.reply_photo(
+                    photo=img,
+                    caption=(f"📊 *GOLD [1H]*\n"
+                             f"💰 ${sig['price']:,.3f}\n"
+                             f"{'🟢 BULLISH' if sig['direction']=='BULLISH' else '🔴 BEARISH' if sig['direction']=='BEARISH' else '🟡 NEUTRAL'}\n"
+                             f"BUY {sig['buyScore']}/12 · SELL {sig['sellScore']}/12"),
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=main_keyboard()
+                )
+            else:
+                await query.message.reply_text("❌ فشل رسم الشارت.",
+                                               reply_markup=main_keyboard())
+
     elif data == "help":
         text = (
             "❓ *GOLD MASTER BOT — المساعدة*\n\n"
@@ -1141,9 +1334,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚡ *SMC* — Order Blocks وFVG\n"
             "📈 *تقرير* — تقرير شامل\n"
             "🔔 *تنبيهات* — تفعيل/تعطيل التنبيهات\n"
-            "🤖 *AI* — تحليل بالذكاء الاصطناعي\n\n"
+            "🤖 *AI* — تحليل بالذكاء الاصطناعي\n"
+            "📊 *شارت* — شارت احترافي بالصورة\n\n"
             "لإضافة تنبيه:\n"
-            "`/setalert 3100 above سبب`"
+            "`/setalert 3100 above سبب`\n"
+            "لشارت timeframe معين:\n"
+            "`/chart 15m` أو `/chart 4h`"
         )
         await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
@@ -1554,6 +1750,7 @@ def main():
     app.add_handler(CommandHandler("setalert",  cmd_set_alert))
     app.add_handler(CommandHandler("alerts",    cmd_alerts_list))
     app.add_handler(CommandHandler("ai",        cmd_ai))
+    app.add_handler(CommandHandler("chart",     cmd_chart))
     app.add_handler(CommandHandler("help",      cmd_help))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
