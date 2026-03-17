@@ -1102,10 +1102,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await query.message.reply_text("⏳ جاري التحليل بالذكاء الاصطناعي...",
                                                reply_markup=main_keyboard())
-                price = get_price()
-                d     = fetch_ohlcv("5min", 200)
-                sig   = full_analysis(d) if d else {}
-                text  = await get_claude_analysis(price, sig)
+                d    = fetch_ohlcv_cached("1h", 200)
+                if not d:
+                    text = "❌ فشل جلب البيانات."
+                else:
+                    sig  = full_analysis(d)
+                    text = await claude_analysis(sig)
             except Exception as e:
                 text = f"❌ خطأ في Claude AI: {str(e)}"
         await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
