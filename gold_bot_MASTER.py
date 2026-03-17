@@ -931,12 +931,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("⏳ جاري حساب Pivot Points...",
                                        reply_markup=main_keyboard())
         d = fetch_ohlcv("1day", 10)
-        if not d:
-            text = "❌ فشل جلب البيانات."
+        if not d or not d.get("high"):
+            text = "❌ فشل جلب البيانات. تحقق من TWELVEDATA_KEY."
         else:
-            H = max(c["high"] for c in d[-5:])
-            L = min(c["low"]  for c in d[-5:])
-            C = d[-1]["close"]
+            H = max(d["high"][-5:])
+            L = min(d["low"][-5:])
+            C = d["close"][-1]
             PP = (H+L+C)/3
             R1,R2,R3 = 2*PP-L, PP+(H-L), H+2*(PP-L)
             S1,S2,S3 = 2*PP-H, PP-(H-L), L-2*(H-PP)
@@ -957,22 +957,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("⏳ جاري حساب Fibonacci...",
                                        reply_markup=main_keyboard())
         d = fetch_ohlcv("1day", 60)
-        if not d:
-            text = "❌ فشل جلب البيانات."
+        if not d or not d.get("high"):
+            text = "❌ فشل جلب البيانات. تحقق من TWELVEDATA_KEY."
         else:
-            H   = max(c["high"]  for c in d)
-            L   = min(c["low"]   for c in d)
+            H   = max(d["high"])
+            L   = min(d["low"])
+            C   = d["close"][-1]
             rng = H - L
-            text = (f"📐 *FIBONACCI RETRACEMENT*\n\nHigh: `{H:.3f}` Low: `{L:.3f}`\n\n"
+            # Find where current price sits
+            retrace = ((H - C) / rng * 100) if rng > 0 else 0
+            text = (f"📐 *FIBONACCI RETRACEMENT*\n"
+                    f"High: `{H:.3f}` · Low: `{L:.3f}`\n"
+                    f"الآن: `{C:.3f}` ({retrace:.1f}% retrace)\n\n"
                     f"0%:    `{H:.3f}`\n"
                     f"23.6%: `{H-rng*.236:.3f}`\n"
                     f"38.2%: `{H-rng*.382:.3f}` 🔑\n"
                     f"50%:   `{H-rng*.5:.3f}` 🔑\n"
-                    f"61.8%: `{H-rng*.618:.3f}` 🥇\n"
+                    f"61.8%: `{H-rng*.618:.3f}` 🥇 Golden\n"
                     f"78.6%: `{H-rng*.786:.3f}`\n"
                     f"100%:  `{L:.3f}`\n\n"
-                    f"Ext 127.2%: `{L-rng*.272:.3f}`\n"
-                    f"Ext 161.8%: `{L-rng*.618:.3f}`")
+                    f"📈 Extensions:\n"
+                    f"127.2%: `{L-rng*.272:.3f}`\n"
+                    f"161.8%: `{L-rng*.618:.3f}`")
         await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
@@ -980,8 +986,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("⏳ جاري تحليل Smart Money...",
                                        reply_markup=main_keyboard())
         d = fetch_ohlcv("1h", 100)
-        if not d:
-            text = "❌ فشل جلب البيانات."
+        if not d or not d.get("close"):
+            text = "❌ فشل جلب البيانات. تحقق من TWELVEDATA_KEY."
         else:
             sig  = full_analysis(d)
             obs  = sig.get("order_blocks", [])
@@ -1052,15 +1058,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "ai":
         if not HAS_CLAUDE or not CLAUDE_KEY:
             text = ("🤖 *Claude AI*\n\n"
-                    "❌ غير مفعّل\n"
-                    "أضف CLAUDE_KEY في Environment Variables")
+                    "❌ غير مفعّل حالياً\n\n"
+                    "لتفعيله أضف في Render:\n"
+                    "Key: `CLAUDE_KEY`\n"
+                    "Value: مفتاح API من console.anthropic.com\n\n"
+                    "الحصول على مفتاح مجاني:\n"
+                    "1. روح console.anthropic.com\n"
+                    "2. سجّل حساب مجاني\n"
+                    "3. أنشئ API Key")
         else:
-            await query.message.reply_text("⏳ جاري التحليل بالذكاء الاصطناعي...",
-                                           reply_markup=main_keyboard())
-            price = get_price()
-            d     = fetch_ohlcv("5min", 200)
-            sig   = full_analysis(d) if d else {}
-            text  = await get_claude_analysis(price, sig)
+            try:
+                await query.message.reply_text("⏳ جاري التحليل بالذكاء الاصطناعي...",
+                                               reply_markup=main_keyboard())
+                price = get_price()
+                d     = fetch_ohlcv("5min", 200)
+                sig   = full_analysis(d) if d else {}
+                text  = await get_claude_analysis(price, sig)
+            except Exception as e:
+                text = f"❌ خطأ في Claude AI: {str(e)}"
         await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
