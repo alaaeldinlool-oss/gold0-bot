@@ -862,11 +862,10 @@ def make_ascii_chart(prices, width=20, height=6):
                 line += "│"
             else:
                 line += " "
-        rows.append(f"`{threshold:>8.1f}` {line}")
-    # Add trend arrow
+        rows.append(f"{threshold:>8.1f} {line}")
     trend = "↗" if prices[-1] > prices[0] else "↘" if prices[-1] < prices[0] else "→"
     rows.append(f"         {'▔'*width} {trend}")
-    return "\n".join(rows)
+    return "```\n" + "\n".join(rows) + "\n```"
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج ضغط الأزرار"""
@@ -879,20 +878,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "price":
         price = get_price_cached()
         if price:
-            # Try to get recent prices for mini chart
-            chart_str = ""
             try:
                 d = fetch_ohlcv("5min", 24)
                 if d:
-                    closes = d["close"][-20:]
-                    chart_str = "\n\n" + make_ascii_chart(closes)
+                    closes = d["close"]
+                    high   = max(d["high"][-24:])
+                    low    = min(d["low"][-24:])
+                    open_  = closes[0]
+                    chg    = price - open_
+                    chg_pct= chg / open_ * 100
+                    chg_icon = "📈" if chg >= 0 else "📉"
+                    sign   = "+" if chg >= 0 else ""
+                    text = (
+                        f"🥇 *GOLD / USD*\n"
+                        f"💰 السعر: *{fmt_price(price)}*\n\n"
+                        f"{chg_icon} التغير (2 ساعة): *{sign}{chg:.2f}$ ({sign}{chg_pct:.2f}%)*\n"
+                        f"📊 أعلى سعر:  `{fmt_price(high)}`\n"
+                        f"📊 أدنى سعر:  `{fmt_price(low)}`\n\n"
+                        f"🕐 {now_local().strftime('%H:%M:%S')} (GMT+2)"
+                    )
+                else:
+                    raise Exception()
             except:
-                pass
-            chg_icon = "📈" if price > (price * 0.999) else "📉"
-            text = (f"🥇 *GOLD / USD*\n"
-                    f"💰 *{fmt_price(price)}*\n"
-                    f"🕐 {now_local().strftime('%H:%M:%S') + ' (GMT+2)'} UTC"
-                    f"{chart_str}")
+                text = (f"🥇 *GOLD / USD*\n"
+                        f"💰 *{fmt_price(price)}*\n"
+                        f"🕐 {now_local().strftime('%H:%M:%S')} (GMT+2)")
         else:
             text = "❌ فشل جلب السعر. تحقق من API Key."
         await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
