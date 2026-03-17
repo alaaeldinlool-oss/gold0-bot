@@ -1229,11 +1229,12 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     # Jobs — async (no threading issues)
-    jq: JobQueue = app.job_queue
-    jq.run_repeating(check_and_send_alerts, interval=60, first=10)
-    # Daily report at 07:00 and 20:00 UTC
-    jq.run_daily(send_daily_report, time=datetime.strptime("07:00","  %H:%M").time())
-    jq.run_daily(send_daily_report, time=datetime.strptime("20:00","%H:%M").time())
+    jq = app.job_queue
+    if jq is not None:
+        jq.run_repeating(check_and_send_alerts, interval=60, first=10)
+        from datetime import time as dtime
+        jq.run_daily(send_daily_report, time=dtime(7, 0))
+        jq.run_daily(send_daily_report, time=dtime(20, 0))
 
     print("✅ Bot is running! Press Ctrl+C to stop.")
     app.run_polling(drop_pending_updates=True)
