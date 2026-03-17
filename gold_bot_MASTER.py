@@ -815,6 +815,33 @@ def main_keyboard():
     ])
 
 
+
+# ════════════════════════════════════════════════════════════════
+#  DATA CACHE — يقلل الـ API requests
+# ════════════════════════════════════════════════════════════════
+_cache = {}
+
+def fetch_ohlcv_cached(interval: str, outputsize: int, ttl: int = 240):
+    """Fetch with cache — بيحفظ البيانات لـ 4 دقائق"""
+    key = f"{interval}_{outputsize}"
+    now = time.time()
+    if key in _cache and now - _cache[key]['time'] < ttl:
+        return _cache[key]['data']
+    data = fetch_ohlcv(interval, outputsize)
+    if data:
+        _cache[key] = {'data': data, 'time': now}
+    return data
+
+def get_price_cached(ttl: int = 120):
+    """Get price with cache — بيحفظ لدقيقتين"""
+    now = time.time()
+    if 'price' in _cache and now - _cache['price']['time'] < ttl:
+        return _cache['price']['data']
+    price = get_price()
+    if price:
+        _cache['price'] = {'data': price, 'time': now}
+    return price
+
 def make_ascii_chart(prices, width=20, height=6):
     """رسم شارت نصي بسيط داخل Telegram"""
     if not prices or len(prices) < 2:
@@ -849,7 +876,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # نعمل fake update عشان نعيد استخدام نفس الـ handlers
     if data == "price":
-        price = get_price()
+        price = get_price_cached()
         if price:
             # Try to get recent prices for mini chart
             chart_str = ""
@@ -1297,8 +1324,8 @@ async def auto_hourly_signal(context):
     if not REPORT_CHAT_IDS:
         return
     try:
-        price = get_price()
-        d     = fetch_ohlcv("5min", 200)
+        price = get_price_cached()
+        d     = fetch_ohlcv_cached("5min", 200)
         if not price or not d:
             return
         sig  = full_analysis(d)
@@ -1396,8 +1423,8 @@ async def check_level_break(context):
     if not REPORT_CHAT_IDS:
         return
     try:
-        price = get_price()
-        d     = fetch_ohlcv("1day", 10)
+        price = get_price_cached()
+        d     = fetch_ohlcv_cached("1day", 10)
         if not price or not d:
             return
 
@@ -1479,13 +1506,13 @@ def main():
     # Jobs — async (no threading issues)
     jq = app.job_queue
     if jq is not None:
-        jq.run_repeating(check_and_send_alerts, interval=60, first=10)
+        jq.run_repeating(check_and_send_alerts, interval=300, first=30)
         # Hourly auto-signal
         jq.run_repeating(auto_hourly_signal, interval=3600, first=30)
         # Strong signal check every 5 minutes
-        jq.run_repeating(check_strong_signal, interval=300, first=60)
+        jq.run_repeating(check_strong_signal, interval=900, first=120)
         # Level break check every 2 minutes
-        jq.run_repeating(check_level_break, interval=120, first=90)
+        jq.run_repeating(check_level_break, interval=600, first=180)
         from datetime import time as dtime
         jq.run_daily(send_daily_report, time=dtime(7, 0))
         jq.run_daily(send_daily_report, time=dtime(20, 0))
