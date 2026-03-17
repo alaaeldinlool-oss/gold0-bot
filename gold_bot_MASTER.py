@@ -41,7 +41,18 @@ import logging
 import asyncio
 import time
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+# ── Timezone helper ───────────────────────────────────────────────
+def now_local():
+    """الوقت المحلي GMT+2"""
+    return datetime.now(timezone.utc) + timedelta(hours=2)
+
+def fmt_time():
+    return now_local().strftime('%H:%M:%S') + ' (GMT+2)'
+
+def fmt_datetime():
+    return now_local().strftime('%Y-%m-%d %H:%M')
 from typing import Optional
 
 import requests
@@ -533,7 +544,7 @@ def fmt_analysis_msg(sig: dict, tf: str = '1m') -> str:
     if rsi_warn:
         lines.append(f"   {rsi_warn}")
 
-    lines.append(f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"🕐 {now_local().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("╚══════════════════════╝")
     return '\n'.join(lines)
 
@@ -565,7 +576,7 @@ def fmt_mtf_msg(results: dict) -> str:
         )
 
     lines += ["```", "", f"💰 السعر: *{fmt_price(list(results.values())[-1]['price'])}*"]
-    lines.append(f"🕐 {datetime.now().strftime('%H:%M:%S')}")
+    lines.append(f"🕐 {now_local().strftime('%H:%M:%S') + ' (GMT+2)'}")
     lines.append("╚══════════════════════════════╝")
     return '\n'.join(lines)
 
@@ -631,7 +642,7 @@ def fmt_smc_msg(obs: list, fvgs: list, ms: str, price: float) -> str:
             note  = ' ← داخل FVG!' if near else ''
             lines.append(f"  {icon} {fvg['type']} FVG: {fvg['bottom']:.2f}–{fvg['top']:.2f}{note}")
 
-    lines.append(f"\n🕐 {datetime.now().strftime('%H:%M:%S')}")
+    lines.append(f"\n🕐 {now_local().strftime('%H:%M:%S') + ' (GMT+2)'}")
     lines.append("╚══════════════════════════╝")
     return '\n'.join(lines)
 
@@ -757,7 +768,7 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
             f"   {'🔴 SL'  if is_b else '🟢 SL'}:  {fmt_price(p - a     if is_b else p + a)}",
         ]
 
-    report += ["", f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}", "╚══════════════════╝"]
+    report += ["", f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')}", "╚══════════════════╝"]
     text = '\n'.join(report)
 
     for cid in set(chat_ids):
@@ -852,7 +863,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chg_icon = "📈" if price > (price * 0.999) else "📉"
             text = (f"🥇 *GOLD / USD*\n"
                     f"💰 *{fmt_price(price)}*\n"
-                    f"🕐 {datetime.now().strftime('%H:%M:%S')} UTC"
+                    f"🕐 {now_local().strftime('%H:%M:%S') + ' (GMT+2)'} UTC"
                     f"{chart_str}")
         else:
             text = "❌ فشل جلب السعر. تحقق من API Key."
@@ -1006,7 +1017,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             atr  = sig.get("ATR",0)
             icon = "🟢" if dire=="BULLISH" else "🔴" if dire=="BEARISH" else "🟡"
             text = (f"📈 *GOLD MASTER REPORT*\n"
-                    f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+                    f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')}\n\n"
                     f"💰 السعر: *{fmt_price(price)}*\n"
                     f"{icon} الاتجاه: *{dire}*\n\n"
                     f"BUY Score:  {bs}/12\n"
@@ -1095,7 +1106,7 @@ async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if price:
         await update.message.reply_text(
             f"🥇 *GOLD / USD*\n💰 *{fmt_price(price)}*\n"
-            f"🕐 {datetime.now().strftime('%H:%M:%S')}",
+            f"🕐 {now_local().strftime('%H:%M:%S') + ' (GMT+2)'}",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_keyboard()
         )
@@ -1288,7 +1299,7 @@ async def auto_hourly_signal(context):
 
         text = (
             f"{icon} *تحديث ساعي — GOLD*\n"
-            f"🕐 {datetime.now().strftime('%H:%M')} UTC\n\n"
+            f"🕐 {now_local().strftime('%H:%M') + ' (GMT+2)'} UTC\n\n"
             f"💰 السعر: *{fmt_price(price)}*\n"
             f"📊 الاتجاه: *{dire}*\n"
             f"BUY {bs}/12 · SELL {ss}/12\n"
@@ -1346,7 +1357,7 @@ async def check_strong_signal(context):
 
         text = (
             f"{icon} *تنبيه إشارة قوية!*\n"
-            f"⏰ {datetime.now().strftime('%H:%M:%S')} UTC\n\n"
+            f"⏰ {now_local().strftime('%H:%M:%S') + ' (GMT+2)'} UTC\n\n"
             f"💰 السعر: *{fmt_price(price)}*\n"
             f"📢 {signal_txt}\n\n"
             f"🎯 TP1: `{tp1:.3f}`\n"
