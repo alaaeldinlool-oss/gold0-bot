@@ -1,0 +1,6 @@
+services:
+  - type: worker
+    name: gold-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python gold_bot_MASTER.py
