@@ -73,6 +73,12 @@ try:
 except ImportError:
     HAS_GROQ = False
 
+try:
+    from pymongo import MongoClient
+    HAS_MONGO = True
+except ImportError:
+    HAS_MONGO = False
+
 from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
@@ -93,6 +99,9 @@ TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e
 # Groq API Key (مجاني — من console.groq.com)
 GROQ_KEY        = os.getenv("GROQ_KEY",        "")
 
+# MongoDB URI (لحفظ الإشارات والإحصائيات)
+MONGODB_URI     = os.getenv("MONGODB_URI",     "")
+
 # Chat IDs for daily reports (أضف الـ chat IDs اللي تحب ترسلها)
 REPORT_CHAT_IDS = []  # مثال: [123456789, -987654321]
 
@@ -106,6 +115,121 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 log = logging.getLogger(__name__)
+
+# ════════════════════════════════════════════════════════════════
+#  MONGODB — حفظ الإشارات والإحصائيات
+# ════════════════════════════════════════════════════════════════
+
+_mongo_db = None
+
+def get_db():
+    """اتصال بـ MongoDB"""
+    global _mongo_db
+    if _mongo_db is not None:
+        return _mongo_db
+    if not HAS_MONGO or not MONGODB_URI:
+        return None
+    try:
+        client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+        _mongo_db = client['goldbot']
+        log.info("✅ MongoDB connected")
+        return _mongo_db
+    except Exception as e:
+        log.warning(f"MongoDB connection failed: {e}")
+        return None
+
+def save_signal(chat_id: int, direction: str, price: float,
+                tp1: float, tp2: float, sl: float):
+    """احفظ الإشارة في MongoDB"""
+    db = get_db()
+    if not db:
+        return
+    try:
+        db.signals.insert_one({
+            'chat_id':   chat_id,
+            'direction': direction,
+            'price':     price,
+            'tp1':       tp1,
+            'tp2':       tp2,
+            'sl':        sl,
+            'result':    'pending',   # pending / tp1 / tp2 / sl
+            'pnl':       0.0,
+            'time':      now_local().isoformat(),
+        })
+    except Exception as e:
+        log.warning(f"save_signal error: {e}")
+
+def update_signals_result():
+    """راجع الإشارات المفتوحة وشوف هل وصلت TP أو SL"""
+    db = get_db()
+    if not db:
+        return
+    try:
+        price = get_price()
+        if not price:
+            return
+        pending = list(db.signals.find({'result': 'pending'}))
+        for sig in pending:
+            entry  = sig['price']
+            tp1    = sig['tp1']
+            tp2    = sig['tp2']
+            sl     = sig['sl']
+            dire   = sig['direction']
+            result = None
+            pnl    = 0.0
+
+            if dire == 'BULLISH':
+                if price >= tp2:
+                    result = 'tp2'; pnl = tp2 - entry
+                elif price >= tp1:
+                    result = 'tp1'; pnl = tp1 - entry
+                elif price <= sl:
+                    result = 'sl';  pnl = sl  - entry
+            else:
+                if price <= tp2:
+                    result = 'tp2'; pnl = entry - tp2
+                elif price <= tp1:
+                    result = 'tp1'; pnl = entry - tp1
+                elif price >= sl:
+                    result = 'sl';  pnl = entry - sl
+
+            if result:
+                db.signals.update_one(
+                    {'_id': sig['_id']},
+                    {'$set': {'result': result, 'pnl': round(pnl, 2)}}
+                )
+    except Exception as e:
+        log.warning(f"update_signals_result error: {e}")
+
+def get_stats(chat_id: int) -> dict:
+    """احسب إحصائيات الإشارات لـ chat_id"""
+    db = get_db()
+    if not db:
+        return {}
+    try:
+        signals = list(db.signals.find({'chat_id': chat_id, 'result': {'$ne': 'pending'}}))
+        if not signals:
+            return {}
+        total   = len(signals)
+        wins    = [s for s in signals if s['result'] in ('tp1','tp2')]
+        losses  = [s for s in signals if s['result'] == 'sl']
+        pnl_sum = sum(s['pnl'] for s in signals)
+        best    = max(signals, key=lambda x: x['pnl'])
+        worst   = min(signals, key=lambda x: x['pnl'])
+        last10  = signals[-10:]
+        return {
+            'total':    total,
+            'wins':     len(wins),
+            'losses':   len(losses),
+            'accuracy': round(len(wins)/total*100, 1),
+            'pnl':      round(pnl_sum, 2),
+            'best':     round(best['pnl'], 2),
+            'worst':    round(worst['pnl'], 2),
+            'last10':   last10,
+        }
+    except Exception as e:
+        log.warning(f"get_stats error: {e}")
+        return {}
 
 # ════════════════════════════════════════════════════════════════
 #  KEEP-ALIVE — يمنع Render من إيقاف البوت
@@ -982,6 +1106,9 @@ def main_keyboard():
             InlineKeyboardButton("📊 شارت",         callback_data="chart"),
             InlineKeyboardButton("❓ مساعدة",       callback_data="help"),
         ],
+        [
+            InlineKeyboardButton("🏆 إحصائياتي",   callback_data="stats"),
+        ],
     ])
 
 
@@ -1321,6 +1448,35 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.message.reply_text("❌ فشل رسم الشارت.",
                                                reply_markup=main_keyboard())
 
+    elif data == "stats":
+        chat_id = query.message.chat_id
+        update_signals_result()
+        stats = get_stats(chat_id)
+        if not stats:
+            text = ("📊 *إحصائيات الإشارات*\n\n"
+                    "لا توجد إشارات مسجّلة بعد.\n"
+                    "الإشارات القوية (+9/12) بتتسجل تلقائياً.")
+        else:
+            last10_lines = []
+            for s in stats['last10']:
+                icon = '✅' if s['result'] in ('tp1','tp2') else '❌'
+                dire = '🟢' if s['direction']=='BULLISH' else '🔴'
+                pnl  = f"+{s['pnl']:.1f}" if s['pnl'] >= 0 else f"{s['pnl']:.1f}"
+                last10_lines.append(f"{icon} {dire} `{s['price']:.1f}` → {s['result'].upper()} ({pnl}$)")
+            text = (
+                f"📊 *إحصائيات الإشارات*\n\n"
+                f"📈 إجمالي: *{stats['total']}*\n"
+                f"✅ ناجحة: *{stats['wins']}*  ❌ فاشلة: *{stats['losses']}*\n"
+                f"🎯 الدقة: *{stats['accuracy']}%*\n\n"
+                f"💰 إجمالي الربح: *{'+' if stats['pnl']>=0 else ''}{stats['pnl']:.1f}$*\n"
+                f"📈 أفضل: *+{stats['best']:.1f}$*\n"
+                f"📉 أسوأ: *{stats['worst']:.1f}$*\n\n"
+                f"⏱ *آخر 10 إشارات:*\n" +
+                '\n'.join(last10_lines)
+            )
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
+
     elif data == "help":
         text = (
             "❓ *GOLD MASTER BOT — المساعدة*\n\n"
@@ -1557,6 +1713,49 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = await claude_analysis(sig)
     await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إحصائيات الإشارات ودقتها"""
+    chat_id = update.effective_chat.id
+    await update.message.reply_text("⏳ جاري حساب الإحصائيات...")
+
+    # تحديث نتائج الإشارات المفتوحة أولاً
+    update_signals_result()
+    stats = get_stats(chat_id)
+
+    if not stats:
+        await update.message.reply_text(
+            "📊 *إحصائيات الإشارات*\n\n"
+            "لا توجد إشارات مسجّلة بعد.\n"
+            "الإشارات القوية (+9/12) بتتسجل تلقائياً.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_keyboard()
+        )
+        return
+
+    # آخر 10 إشارات
+    last10_lines = []
+    for s in stats['last10']:
+        icon = '✅' if s['result'] in ('tp1','tp2') else '❌'
+        dire = '🟢' if s['direction']=='BULLISH' else '🔴'
+        pnl  = f"+{s['pnl']:.1f}" if s['pnl'] >= 0 else f"{s['pnl']:.1f}"
+        last10_lines.append(f"{icon} {dire} `{s['price']:.1f}` → {s['result'].upper()} ({pnl}$)")
+
+    text = (
+        f"📊 *إحصائيات الإشارات*\n\n"
+        f"📈 إجمالي الإشارات: *{stats['total']}*\n"
+        f"✅ ناجحة: *{stats['wins']}*  ❌ فاشلة: *{stats['losses']}*\n"
+        f"🎯 الدقة: *{stats['accuracy']}%*\n\n"
+        f"💰 إجمالي الربح: *{'+' if stats['pnl']>=0 else ''}{stats['pnl']:.1f}$*\n"
+        f"📈 أفضل إشارة: *+{stats['best']:.1f}$*\n"
+        f"📉 أسوأ إشارة: *{stats['worst']:.1f}$*\n\n"
+        f"⏱ *آخر 10 إشارات:*\n" +
+        '\n'.join(last10_lines)
+    )
+    await update.message.reply_text(
+        text, parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_keyboard()
+    )
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_start(update, context)
 
@@ -1663,6 +1862,8 @@ async def check_strong_signal(context):
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=main_keyboard()
             )
+            # احفظ الإشارة في MongoDB
+            save_signal(chat_id, dire, price, tp1, tp2, sl)
     except Exception as e:
         log.error(f"check_strong_signal error: {e}")
 
@@ -1751,6 +1952,7 @@ def main():
     app.add_handler(CommandHandler("alerts",    cmd_alerts_list))
     app.add_handler(CommandHandler("ai",        cmd_ai))
     app.add_handler(CommandHandler("chart",     cmd_chart))
+    app.add_handler(CommandHandler("stats",     cmd_stats))
     app.add_handler(CommandHandler("help",      cmd_help))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
@@ -1764,6 +1966,8 @@ def main():
         jq.run_repeating(check_strong_signal, interval=900, first=120)
         # Level break check every 2 minutes
         jq.run_repeating(check_level_break, interval=600, first=180)
+        # تحديث نتائج الإشارات كل 10 دقائق
+        jq.run_repeating(lambda ctx: update_signals_result(), interval=600, first=60)
         from datetime import time as dtime
         jq.run_daily(send_daily_report, time=dtime(7, 0))
         jq.run_daily(send_daily_report, time=dtime(20, 0))

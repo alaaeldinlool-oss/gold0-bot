@@ -6,3 +6,4 @@ ta
 groq
 matplotlib
 mplfinance
+pymongo[srv]
