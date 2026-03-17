@@ -1065,16 +1065,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         global alerts_enabled
         alerts_enabled = not alerts_enabled
         status = "🟢 مفعّل" if alerts_enabled else "🔴 متوقف"
-        text = f"🔔 *التنبيهات التلقائية*\nالحالة: {status}"
+        text = (f"🔔 *التنبيهات التلقائية*\n"
+                f"الحالة: {status}\n\n"
+                f"لإضافة تنبيه عند مستوى معين:\n"
+                f"`/setalert 3100 above وصل الهدف`")
         await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
     elif data == "alerts":
-        if not price_alerts:
+        chat_id = query.message.chat_id
+        user_alerts = alerts.get(chat_id, []) if isinstance(alerts, dict) else alerts
+        if not user_alerts:
             text = "📋 لا يوجد تنبيهات مضافة\n\nأضف تنبيه: /setalert 3100 above سبب"
         else:
             lines = ["📋 *التنبيهات النشطة:*\n"]
-            for a in price_alerts:
+            for a in user_alerts:
                 icon = "↑" if a["type"]=="above" else "↓"
                 done = "✅" if a.get("triggered") else "⏳"
                 lines.append(f"{done} {icon} `{a['price']:.3f}` — {a.get('label','')}")
