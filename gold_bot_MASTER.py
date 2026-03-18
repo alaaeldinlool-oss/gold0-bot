@@ -1337,10 +1337,9 @@ def get_weekly_report(weeks_back: int = 0) -> Optional[dict]:
                     if ws <= date_str <= we:
                         chg     = closes[i] - opens[i]
                         chg_pct = (chg / opens[i] * 100) if opens[i] else 0
-                        # اسم اليوم
                         from datetime import date as ddate
-                        d_obj   = ddate.fromisoformat(date_str)
-                        day_name= DAYS_AR.get(d_obj.weekday(), date_str)
+                        d_obj    = ddate.fromisoformat(date_str)
+                        day_name = DAYS_AR.get(d_obj.weekday(), date_str)
                         days.append({
                             'date':       date_str,
                             'day_name':   day_name,
@@ -1356,6 +1355,38 @@ def get_weekly_report(weeks_back: int = 0) -> Optional[dict]:
                         })
         except Exception as e:
             log.error(f"TwelveData weekly fallback error: {e}")
+
+    # ── أضيف اليوم الحالي من بيانات الـ 1H لو مش موجود ──
+    today_str = now_local().strftime('%Y-%m-%d')
+    if ws <= today_str <= we and not any(d['date'] == today_str for d in days):
+        try:
+            d_today = fetch_ohlcv('1h', 24)
+            if d_today and d_today.get('close'):
+                open_today  = d_today['open'][0]
+                close_today = d_today['close'][-1]
+                high_today  = max(d_today['high'])
+                low_today   = min(d_today['low'])
+                chg         = close_today - open_today
+                chg_pct     = (chg / open_today * 100) if open_today else 0
+                from datetime import date as ddate
+                d_obj       = ddate.fromisoformat(today_str)
+                day_name    = DAYS_AR.get(d_obj.weekday(), today_str)
+                days.append({
+                    'date':       today_str,
+                    'day_name':   day_name + ' (جاري)',
+                    'weekday':    d_obj.weekday(),
+                    'open':       round(open_today,  3),
+                    'close':      round(close_today, 3),
+                    'high':       round(high_today,  3),
+                    'low':        round(low_today,   3),
+                    'change':     round(chg, 3),
+                    'change_pct': round(chg_pct, 3),
+                    'bullish':    chg >= 0,
+                    'range':      round(high_today - low_today, 3),
+                })
+                days.sort(key=lambda x: x['date'])
+        except Exception as e:
+            log.warning(f"today data error: {e}")
 
     if not days:
         return None
