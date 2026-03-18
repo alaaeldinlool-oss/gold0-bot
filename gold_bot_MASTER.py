@@ -142,7 +142,7 @@ def save_signal(chat_id: int, direction: str, price: float,
                 tp1: float, tp2: float, sl: float):
     """احفظ الإشارة في MongoDB"""
     db = get_db()
-    if not db:
+    if db is None:
         return
     try:
         db.signals.insert_one({
@@ -162,7 +162,7 @@ def save_signal(chat_id: int, direction: str, price: float,
 def update_signals_result():
     """راجع الإشارات المفتوحة وشوف هل وصلت TP أو SL"""
     db = get_db()
-    if not db:
+    if db is None:
         return
     try:
         price = get_price()
@@ -204,7 +204,7 @@ def update_signals_result():
 def get_stats(chat_id: int) -> dict:
     """احسب إحصائيات الإشارات لـ chat_id"""
     db = get_db()
-    if not db:
+    if db is None:
         return {}
     try:
         signals = list(db.signals.find({'chat_id': chat_id, 'result': {'$ne': 'pending'}}))
@@ -336,32 +336,38 @@ _usd_egp_cache = {'rate': None, 'time': 0}
 def get_usd_egp() -> Optional[float]:
     """جيب سعر الدولار — بيتحدث كل 30 دقيقة"""
     global _usd_egp_cache
-    now = time.time()
+    now_t = time.time()
     # لو في cache أقل من 30 دقيقة ارجعه
-    if _usd_egp_cache['rate'] and now - _usd_egp_cache['time'] < 1800:
+    if _usd_egp_cache['rate'] and now_t - _usd_egp_cache['time'] < 1800:
         return _usd_egp_cache['rate']
 
     sources = [
-        "https://api.exchangerate-api.com/v4/latest/USD",
-        "https://open.er-api.com/v6/latest/USD",
+        ("https://api.exchangerate-api.com/v4/latest/USD",   'rates'),
+        ("https://open.er-api.com/v6/latest/USD",             'conversion_rates'),
+        ("https://api.fxratesapi.com/latest?base=USD",        'rates'),
     ]
-    for url in sources:
+    for url, key in sources:
         try:
-            r = requests.get(url, timeout=8)
+            r    = requests.get(url, timeout=10)
             data = r.json()
-            rate = None
-            if 'rates' in data:
-                rate = float(data['rates']['EGP'])
-            elif 'conversion_rates' in data:
-                rate = float(data['conversion_rates']['EGP'])
-            if rate:
-                _usd_egp_cache = {'rate': rate, 'time': now}
-                log.info(f"USD/EGP updated: {rate}")
-                return rate
-        except:
+            if key in data and 'EGP' in data[key]:
+                rate = float(data[key]['EGP'])
+                if rate > 0:
+                    _usd_egp_cache = {'rate': rate, 'time': now_t}
+                    log.info(f"✅ USD/EGP updated: {rate} from {url}")
+                    return rate
+        except Exception as e:
+            log.warning(f"USD/EGP source failed {url}: {e}")
             continue
-    # لو فشل رجّع آخر قيمة محفوظة
-    return _usd_egp_cache['rate']
+
+    # لو كل المصادر فشلت رجّع آخر قيمة محفوظة
+    if _usd_egp_cache['rate']:
+        log.warning("USD/EGP using cached rate")
+        return _usd_egp_cache['rate']
+
+    # قيمة افتراضية لو مفيش أي بيانات
+    log.warning("USD/EGP using fallback rate 50.0")
+    return 50.0
 
 def calc_egypt_gold(gold_usd: float, usd_egp: float) -> dict:
     """
@@ -1161,7 +1167,7 @@ async def track_sessions(context):
 
                 # احفظ في MongoDB
                 db = get_db()
-                if db:
+                if db is not None:
                     try:
                         db.sessions.insert_one({
                             'session':  key,
@@ -1203,7 +1209,7 @@ async def cmd_session_history(update: Update, context: ContextTypes.DEFAULT_TYPE
     """عرض تاريخ آخر 3 سيشنات من MongoDB"""
     await update.message.reply_text("⏳ جاري جلب تاريخ السيشنات...")
     db = get_db()
-    if not db:
+    if db is None:
         await update.message.reply_text(
             "❌ MongoDB غير متصل.",
             reply_markup=main_keyboard()
@@ -1291,7 +1297,7 @@ async def track_daily(context):
             day_name= DAYS_AR.get(now.weekday(), '')
 
             db = get_db()
-            if db:
+            if db is not None:
                 db.daily.insert_one({
                     'date':       today,
                     'day_name':   day_name,
@@ -1325,7 +1331,7 @@ def get_weekly_report(weeks_back: int = 0) -> Optional[dict]:
     days = []
 
     # ── جرب MongoDB أولاً ──
-    if db:
+    if db is not None:
         try:
             days = list(db.daily.find({
                 'date': {'$gte': ws, '$lte': we}
@@ -1422,7 +1428,7 @@ def get_weekly_report(weeks_back: int = 0) -> Optional[dict]:
         'week_high':  week_high,
         'week_low':   week_low,
         'week_range': round(week_high - week_low, 2),
-        'source':     'live' if not db else 'db',
+        'source':     'live' if db is None else 'db',
     }
 
 
@@ -2382,7 +2388,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "session_history":
         db = get_db()
-        if not db:
+        if db is None:
             await query.message.reply_text("❌ MongoDB غير متصل.",
                                            reply_markup=main_keyboard())
         else:
