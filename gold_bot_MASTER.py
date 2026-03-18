@@ -340,35 +340,72 @@ def get_egypt_gold_prices() -> Optional[dict]:
     if _egypt_gold_cache['data'] and now_t - _egypt_gold_cache['time'] < 1800:
         return _egypt_gold_cache['data']
     try:
-        r = requests.get('https://gold-price-live.com/', timeout=10,
-                         headers={'User-Agent': 'Mozilla/5.0'})
+        import re
+        r    = requests.get('https://gold-price-live.com/', timeout=10,
+                            headers={'User-Agent': 'Mozilla/5.0'})
         text = r.text
 
-        import re
-        def extract(pattern):
-            m = re.search(pattern, text)
-            return float(m.group(1).replace(',', '')) if m else None
+        def find_price(patterns):
+            for pat in patterns:
+                m = re.search(pat, text)
+                if m:
+                    val = float(m.group(1).replace(',', ''))
+                    # تأكد إن القيمة معقولة
+                    if val > 100:
+                        return val
+            return None
 
         data = {
-            'gram_21_buy':  extract(r'عيار 21.*?(\d[\d,]+)\s*جنيه مصري.*?(\d[\d,]+)\s*جنيه مصري'),
-            'gram_21_sell': None,
-            'gram_18':      extract(r'عيار 18.*?(\d[\d,]+)\s*جنيه مصري'),
-            'gram_24':      extract(r'عيار 24.*?(\d[\d,]+)\s*جنيه مصري'),
-            'dollar_bank':  extract(r'الدولار في البنوك.*?([\d.]+)\s*جنيه'),
-            'dollar_sagha': extract(r'دولار الصاغة.*?([\d.]+)\s*جنيه'),
+            'gram_21_buy':  find_price([
+                r'عيار 21[^>]*>\s*(\d[\d,]+)\s*جنيه',
+                r'7[,\d]{3}\s*جنيه مصري.*?عيار 21',
+                r'(\d{4,5})\s*\n.*?عيار 21',
+            ]),
+            'gram_21_sell': find_price([
+                r'عيار 21.*?شراء.*?(\d[\d,]+)',
+            ]),
+            'gram_18': find_price([
+                r'عيار 18[^>]*>\s*(\d[\d,]+)\s*جنيه',
+            ]),
+            'gram_24': find_price([
+                r'عيار 24[^>]*>\s*(\d[\d,]+)\s*جنيه',
+            ]),
+            'dollar_bank':  find_price([
+                r'الدولار في البنوك[^>]*>\s*([\d.]+)\s*جنيه',
+                r'(5[0-9]\.\d+)\s*جنيه مصري.*?الدولار',
+            ]),
+            'dollar_sagha': find_price([
+                r'دولار الصاغة[^>]*>\s*([\d.]+)\s*جنيه',
+                r'(5[0-9]\.\d+)\s*جنيه مصري.*?الصاغة',
+            ]),
         }
 
-        # استخرج عيار 21 بيع وشراء من الجدول
-        table = re.findall(r'عيار 21.*?(\d[\d,]+).*?(\d[\d,]+)', text, re.DOTALL)
-        if table:
-            vals = [float(v.replace(',','')) for v in table[0]]
-            data['gram_21_buy']  = max(vals)
-            data['gram_21_sell'] = min(vals)
+        # استخرج من الجدول مباشرة — أدق
+        table_matches = re.findall(
+            r'عيار (\d+).*?(\d[\d,]+)\s*جنيه مصري.*?(\d[\d,]+)\s*جنيه مصري',
+            text, re.DOTALL
+        )
+        for match in table_matches:
+            karat, v1, v2 = match
+            val1 = float(v1.replace(',', ''))
+            val2 = float(v2.replace(',', ''))
+            # تأكد القيم معقولة (4000-12000)
+            if 4000 < val1 < 15000 and 4000 < val2 < 15000:
+                if karat == '21':
+                    data['gram_21_buy']  = max(val1, val2)
+                    data['gram_21_sell'] = min(val1, val2)
+                elif karat == '24':
+                    data['gram_24'] = max(val1, val2)
+                elif karat == '18':
+                    data['gram_18'] = max(val1, val2)
 
-        if data['gram_21_buy']:
+        # تحقق من صحة البيانات قبل الحفظ
+        if data.get('gram_21_buy') and 4000 < data['gram_21_buy'] < 15000:
             _egypt_gold_cache = {'data': data, 'time': now_t}
-            log.info(f"✅ Egypt gold scraped: 21k={data['gram_21_buy']}")
+            log.info(f"✅ Egypt gold: 21k={data['gram_21_buy']}")
             return data
+        else:
+            log.warning(f"Egypt gold invalid data: {data}")
     except Exception as e:
         log.warning(f"Egypt gold scrape failed: {e}")
     return None
