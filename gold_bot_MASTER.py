@@ -269,6 +269,15 @@ session_data: dict = {
     'newyork': {'open': None, 'high': None, 'low': None, 'active': False},
 }
 
+# تتبع فتح/إغلاق اليوم
+daily_data: dict = {
+    'open':   None,
+    'high':   None,
+    'low':    None,
+    'date':   None,
+    'active': False,
+}
+
 # ════════════════════════════════════════════════════════════════
 #  DATA FETCH — TwelveData
 # ════════════════════════════════════════════════════════════════
@@ -1222,6 +1231,262 @@ async def cmd_session_history(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # ════════════════════════════════════════════════════════════════
+#  DAILY & WEEKLY TRACKING
+# ════════════════════════════════════════════════════════════════
+
+DAYS_AR = {
+    0: 'الاثنين', 1: 'الثلاثاء', 2: 'الأربعاء',
+    3: 'الخميس',  4: 'الجمعة',   5: 'السبت', 6: 'الأحد'
+}
+
+async def track_daily(context):
+    """يتتبع فتح/إغلاق كل يوم ويحفظ في MongoDB"""
+    if not alert_subscribers:
+        return
+    try:
+        price    = get_price_cached()
+        if not price:
+            return
+
+        now      = now_local()
+        today    = now.strftime('%Y-%m-%d')
+        utc_hour = datetime.now(timezone.utc).hour
+        utc_min  = datetime.now(timezone.utc).minute
+
+        # فتح اليوم (00:00 UTC = بداية اليوم)
+        if utc_hour == 0 and utc_min <= 5:
+            if daily_data['date'] != today:
+                daily_data['open']   = price
+                daily_data['high']   = price
+                daily_data['low']    = price
+                daily_data['date']   = today
+                daily_data['active'] = True
+
+        # تحديث High/Low
+        if daily_data['active']:
+            if daily_data['high'] is None or price > daily_data['high']:
+                daily_data['high'] = price
+            if daily_data['low'] is None or price < daily_data['low']:
+                daily_data['low'] = price
+
+        # إغلاق اليوم (23:55 UTC)
+        if utc_hour == 23 and utc_min >= 55 and daily_data['active']:
+            daily_data['active'] = False
+            open_p  = daily_data['open'] or price
+            high_p  = daily_data['high'] or price
+            low_p   = daily_data['low']  or price
+            chg     = price - open_p
+            chg_pct = (chg / open_p * 100) if open_p else 0
+            day_name= DAYS_AR.get(now.weekday(), '')
+
+            db = get_db()
+            if db:
+                db.daily.insert_one({
+                    'date':       today,
+                    'day_name':   day_name,
+                    'weekday':    now.weekday(),
+                    'open':       round(open_p, 3),
+                    'close':      round(price, 3),
+                    'high':       round(high_p, 3),
+                    'low':        round(low_p, 3),
+                    'change':     round(chg, 3),
+                    'change_pct': round(chg_pct, 3),
+                    'bullish':    chg >= 0,
+                    'range':      round(high_p - low_p, 3),
+                })
+                log.info(f"Daily saved: {today} {chg:+.2f}")
+
+    except Exception as e:
+        log.error(f"track_daily error: {e}")
+
+
+def get_weekly_report(weeks_back: int = 0) -> Optional[dict]:
+    """جيب بيانات أسبوع معين من MongoDB"""
+    db = get_db()
+    if not db:
+        return None
+    try:
+        now  = now_local()
+        # ابدأ من أول الأسبوع (الاثنين)
+        days_since_monday = now.weekday()
+        week_start = now - timedelta(days=days_since_monday + weeks_back * 7)
+        week_end   = week_start + timedelta(days=6)
+
+        ws = week_start.strftime('%Y-%m-%d')
+        we = week_end.strftime('%Y-%m-%d')
+
+        days = list(db.daily.find({
+            'date': {'$gte': ws, '$lte': we}
+        }).sort('date', 1))
+
+        if not days:
+            return None
+
+        total_chg  = sum(d['change'] for d in days)
+        bull_days  = [d for d in days if d['bullish']]
+        bear_days  = [d for d in days if not d['bullish']]
+        best_buy   = max(days, key=lambda x: x['change'])
+        best_sell  = min(days, key=lambda x: x['change'])
+        week_high  = max(d['high'] for d in days)
+        week_low   = min(d['low']  for d in days)
+
+        return {
+            'days':       days,
+            'week_start': ws,
+            'week_end':   we,
+            'total_chg':  round(total_chg, 2),
+            'bull_days':  len(bull_days),
+            'bear_days':  len(bear_days),
+            'best_buy':   best_buy,
+            'best_sell':  best_sell,
+            'week_high':  week_high,
+            'week_low':   week_low,
+            'week_range': round(week_high - week_low, 2),
+        }
+    except Exception as e:
+        log.error(f"get_weekly_report error: {e}")
+        return None
+
+
+def fmt_weekly_msg(report: dict, prev: dict = None, label: str = "هذا الأسبوع") -> str:
+    """رسالة التقرير الأسبوعي"""
+    days   = report['days']
+    lines  = [
+        f"╔══ 📅 التقرير الأسبوعي — {label} ══╗",
+        f"📆 {report['week_start']} → {report['week_end']}",
+        f"",
+        f"📊 *أسعار الأيام:*",
+        f"```",
+        f"{'اليوم':<10} {'فتح':>8} {'إغلاق':>8} {'تغيير':>8}",
+        f"{'─'*38}",
+    ]
+
+    for d in days:
+        sign  = '+' if d['change'] >= 0 else ''
+        arrow = '🟢' if d['bullish'] else '🔴'
+        lines.append(
+            f"{d['day_name']:<8} "
+            f"{d['open']:>8.1f} "
+            f"{d['close']:>8.1f} "
+            f"{sign}{d['change']:>6.1f} {arrow}"
+        )
+
+    lines += [
+        f"{'─'*38}",
+        f"```",
+        f"",
+        f"📈 *ملخص الأسبوع:*",
+        f"   {'🟢' if report['total_chg']>=0 else '🔴'} إجمالي التغيير: *{'+' if report['total_chg']>=0 else ''}{report['total_chg']:.2f}$*",
+        f"   📊 أيام صاعدة: *{report['bull_days']}*  |  هابطة: *{report['bear_days']}*",
+        f"   📏 نطاق الأسبوع: *{report['week_range']:.2f}$*",
+        f"   ⬆️ أعلى سعر: `{report['week_high']:.2f}`",
+        f"   ⬇️ أدنى سعر: `{report['week_low']:.2f}`",
+        f"",
+        f"🏆 *أفضل يوم للشراء:*",
+        f"   {report['best_buy']['day_name']} (+{report['best_buy']['change']:.2f}$)",
+        f"",
+        f"📉 *أفضل يوم للبيع:*",
+        f"   {report['best_sell']['day_name']} ({report['best_sell']['change']:.2f}$)",
+    ]
+
+    # مقارنة بالأسبوع السابق
+    if prev:
+        diff = report['total_chg'] - prev['total_chg']
+        sign = '+' if diff >= 0 else ''
+        better = '📈 أفضل' if diff >= 0 else '📉 أضعف'
+        lines += [
+            f"",
+            f"🔄 *مقارنة بالأسبوع السابق:*",
+            f"   الأسبوع ده:  *{'+' if report['total_chg']>=0 else ''}{report['total_chg']:.2f}$*",
+            f"   الأسبوع اللي فات: *{'+' if prev['total_chg']>=0 else ''}{prev['total_chg']:.2f}$*",
+            f"   {better} بـ *{sign}{diff:.2f}$*",
+        ]
+
+    lines += [
+        f"",
+        f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} (GMT+2)",
+        f"╚══════════════════════════════╝",
+    ]
+    return '\n'.join(lines)
+
+
+async def send_weekly_report(context):
+    """يبعت التقرير الأسبوعي تلقائياً كل جمعة 21:00 UTC"""
+    if not alert_subscribers:
+        return
+    try:
+        report = get_weekly_report(0)
+        prev   = get_weekly_report(1)
+        if not report:
+            return
+
+        # توقع AI
+        ai_text = ""
+        if HAS_GROQ and GROQ_KEY:
+            try:
+                client = Groq(api_key=GROQ_KEY)
+                prompt = (
+                    f"أنت محلل ذهب محترف. بناءً على بيانات هذا الأسبوع:\n"
+                    f"التغيير الإجمالي: {report['total_chg']:+.2f}$\n"
+                    f"أيام صاعدة: {report['bull_days']} | هابطة: {report['bear_days']}\n"
+                    f"نطاق الأسبوع: {report['week_range']:.2f}$\n"
+                    f"قدم توقعك للأسبوع القادم في 3 جمل بالعربية."
+                )
+                resp = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=200,
+                )
+                ai_text = f"\n\n🤖 *توقع AI للأسبوع القادم:*\n{resp.choices[0].message.content}"
+            except:
+                pass
+
+        text = fmt_weekly_msg(report, prev) + ai_text
+
+        for chat_id in list(alert_subscribers):
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id, text=text,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=main_keyboard()
+                )
+            except Exception as e:
+                log.warning(f"weekly report send error: {e}")
+
+    except Exception as e:
+        log.error(f"send_weekly_report error: {e}")
+
+
+async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/weekly — التقرير الأسبوعي يدوي"""
+    await update.message.reply_text("⏳ جاري إعداد التقرير الأسبوعي...")
+
+    # هل طلب الأسبوع السابق؟
+    weeks_back = 0
+    if context.args and context.args[0] == 'last':
+        weeks_back = 1
+
+    report = get_weekly_report(weeks_back)
+    prev   = get_weekly_report(weeks_back + 1)
+
+    if not report:
+        await update.message.reply_text(
+            "📊 لا توجد بيانات كافية بعد.\n"
+            "البوت يحتاج يشتغل أسبوع كامل لجمع البيانات.\n\n"
+            "💡 البيانات بتتجمع تلقائياً كل يوم!",
+            reply_markup=main_keyboard()
+        )
+        return
+
+    label = "الأسبوع السابق" if weeks_back == 1 else "هذا الأسبوع"
+    await update.message.reply_text(
+        fmt_weekly_msg(report, prev, label),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_keyboard()
+    )
+
+
+# ════════════════════════════════════════════════════════════════
 #  GROQ AI ANALYSIS (مجاني)
 # ════════════════════════════════════════════════════════════════
 
@@ -1564,6 +1829,7 @@ def main_keyboard():
         ],
         [
             InlineKeyboardButton("🇪🇬 ذهب مصر",    callback_data="egypt"),
+            InlineKeyboardButton("📅 تقرير أسبوعي", callback_data="weekly"),
         ],
     ])
 
@@ -1903,6 +2169,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await query.message.reply_text("❌ فشل رسم الشارت.",
                                                reply_markup=main_keyboard())
+
+    elif data == "weekly":
+        await query.message.reply_text("⏳ جاري إعداد التقرير الأسبوعي...",
+                                       reply_markup=main_keyboard())
+        report = get_weekly_report(0)
+        prev   = get_weekly_report(1)
+        if not report:
+            text = ("📊 لا توجد بيانات كافية بعد.\n"
+                    "البوت يحتاج يشتغل أسبوع كامل لجمع البيانات.\n\n"
+                    "💡 البيانات بتتجمع تلقائياً كل يوم!")
+        else:
+            text = fmt_weekly_msg(report, prev)
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
 
     elif data == "egypt":
         await query.message.reply_text("⏳ جاري جلب أسعار الذهب المصري...",
@@ -2480,6 +2760,7 @@ def main():
     app.add_handler(CommandHandler("session",      cmd_session))
     app.add_handler(CommandHandler("sessions",     cmd_session_history))
     app.add_handler(CommandHandler("egypt",        cmd_egypt))
+    app.add_handler(CommandHandler("weekly",       cmd_weekly))
     app.add_handler(CommandHandler("help",         cmd_help))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
@@ -2499,6 +2780,11 @@ def main():
         jq.run_repeating(notify_session_start, interval=300, first=60)
         # تتبع فتح/إغلاق السيشنات كل 5 دقائق
         jq.run_repeating(track_sessions, interval=300, first=30)
+        # تتبع اليومي كل 5 دقائق
+        jq.run_repeating(track_daily, interval=300, first=60)
+        # تقرير أسبوعي كل جمعة 21:00 UTC
+        from datetime import time as dtime
+        jq.run_daily(send_weekly_report, time=dtime(21, 0), days=(4,))  # 4 = جمعة
         from datetime import time as dtime
         jq.run_daily(send_daily_report, time=dtime(7, 0))
         jq.run_daily(send_daily_report, time=dtime(20, 0))
