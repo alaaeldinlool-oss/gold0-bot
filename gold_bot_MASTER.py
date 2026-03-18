@@ -262,6 +262,13 @@ alert_subscribers: set[int] = set()
 alert_last_signal: dict[int, str] = {}   # chat_id -> last signal sent
 level_alerts: dict[int, list] = {}        # chat_id -> [{price, type, label}]
 
+# تتبع فتح/إغلاق السيشنات
+session_data: dict = {
+    'asian':   {'open': None, 'high': None, 'low': None, 'active': False},
+    'london':  {'open': None, 'high': None, 'low': None, 'active': False},
+    'newyork': {'open': None, 'high': None, 'low': None, 'active': False},
+}
+
 # ════════════════════════════════════════════════════════════════
 #  DATA FETCH — TwelveData
 # ════════════════════════════════════════════════════════════════
@@ -771,6 +778,382 @@ def fmt_smc_msg(obs: list, fvgs: list, ms: str, price: float) -> str:
     return '\n'.join(lines)
 
 # ════════════════════════════════════════════════════════════════
+#  SESSION ANALYSIS — تحليل السيشن
+# ════════════════════════════════════════════════════════════════
+
+SESSIONS = {
+    'asian': {
+        'name':    '🌏 Asian Session',
+        'name_ar': 'السيشن الآسيوي',
+        'start':   0,   # UTC
+        'end':     8,   # UTC
+        'color':   '🟡',
+        'nature':  'هادئ — حركة محدودة وتذبذب ضيق',
+        'tip':     'تجنب الدخول في إشارات قوية — السيولة منخفضة',
+        'gold':    'الذهب بيتحرك في نطاق ضيق عادةً',
+        'risk':    '⚠️ منخفض الحركة',
+    },
+    'london': {
+        'name':    '🏦 London Session',
+        'name_ar': 'السيشن الأوروبي',
+        'start':   8,   # UTC
+        'end':     16,  # UTC
+        'color':   '🟢',
+        'nature':  'نشيط — أعلى سيولة في اليوم',
+        'tip':     'أفضل وقت للتداول — الاتجاه بيتحدد هنا',
+        'gold':    'أكبر حركة في الذهب تحصل في London',
+        'risk':    '✅ عالي الحركة',
+    },
+    'newyork': {
+        'name':    '🗽 New York Session',
+        'name_ar': 'السيشن الأمريكي',
+        'start':   13,  # UTC
+        'end':     21,  # UTC
+        'color':   '🔵',
+        'nature':  'متوسط إلى نشيط — تأثير الأخبار الأمريكية',
+        'tip':     'راقب أخبار الـ Fed والتضخم — بتأثر على الذهب مباشرة',
+        'gold':    'الذهب حساس جداً لبيانات الدولار في هذا الوقت',
+        'risk':    '✅ عالي الحركة',
+    },
+    'overlap': {
+        'name':    '⚡ London-NY Overlap',
+        'name_ar': 'تداخل London و New York',
+        'start':   13,
+        'end':     16,
+        'color':   '🔥',
+        'nature':  'الأقوى في اليوم — أعلى سيولة وأكبر حركة',
+        'tip':     'أفضل وقت للإشارات القوية — الحركة ممتازة',
+        'gold':    'أعلى تذبذب في الذهب — فرص كثيرة',
+        'risk':    '🔥 أعلى حركة',
+    },
+}
+
+def get_current_session() -> dict:
+    """احسب السيشن الحالي بناءً على الوقت UTC"""
+    utc_hour = datetime.now(timezone.utc).hour
+
+    # تداخل London-NY (الأقوى)
+    if 13 <= utc_hour < 16:
+        s = SESSIONS['overlap'].copy()
+        s['active'] = True
+        s['next'] = 'New York ينتهي الـ Overlap ويكمل'
+        s['hours_left'] = 16 - utc_hour
+        return s
+
+    # London
+    if 8 <= utc_hour < 16:
+        s = SESSIONS['london'].copy()
+        s['active'] = True
+        s['next'] = '⚡ Overlap مع New York يبدأ الساعة 13:00 UTC'
+        s['hours_left'] = 16 - utc_hour
+        return s
+
+    # New York
+    if 13 <= utc_hour < 21:
+        s = SESSIONS['newyork'].copy()
+        s['active'] = True
+        s['next'] = '🌏 Asian Session يبدأ الساعة 00:00 UTC'
+        s['hours_left'] = 21 - utc_hour
+        return s
+
+    # Asian
+    s = SESSIONS['asian'].copy()
+    s['active'] = True
+    if utc_hour < 8:
+        s['next'] = '🏦 London Session يبدأ الساعة 08:00 UTC'
+        s['hours_left'] = 8 - utc_hour
+    else:
+        s['next'] = '🌏 Asian Session يبدأ منتصف الليل'
+        s['hours_left'] = 24 - utc_hour
+    return s
+
+def fmt_session_msg(price: float, sig: dict) -> str:
+    """رسالة تحليل السيشن الكاملة"""
+    utc_now  = datetime.now(timezone.utc)
+    local_now= now_local()
+    session  = get_current_session()
+
+    # السيشن القادم
+    sessions_order = [
+        ('🌏 Asian',         '00:00', '08:00', 'UTC'),
+        ('🏦 London',        '08:00', '16:00', 'UTC'),
+        ('⚡ London-NY',     '13:00', '16:00', 'UTC'),
+        ('🗽 New York',      '13:00', '21:00', 'UTC'),
+    ]
+
+    dire = sig.get('direction', 'NEUTRAL')
+    bs   = sig.get('buyScore', 0)
+    ss   = sig.get('sellScore', 0)
+    atr  = sig.get('ATR', 0)
+
+    # توافق الإشارة مع السيشن
+    if session['name_ar'] == 'السيشن الآسيوي':
+        compat = '⚠️ سيولة منخفضة — إشارات أقل موثوقية'
+    elif dire == 'NEUTRAL':
+        compat = '⏳ لا توجد إشارة واضحة دلوقتي'
+    elif bs >= 8 or ss >= 8:
+        compat = '🔥 إشارة قوية في سيشن نشيط — فرصة ممتازة!'
+    else:
+        compat = '📊 إشارة متوسطة — انتظر تأكيد أكتر'
+
+    lines = [
+        f"╔══ 🕐 SESSION ANALYSIS ══╗",
+        f"",
+        f"{session['color']} *السيشن الحالي:*",
+        f"   {session['name']}",
+        f"   ({session['name_ar']})",
+        f"",
+        f"⏰ *الوقت:*",
+        f"   🌍 UTC:    `{utc_now.strftime('%H:%M')}`",
+        f"   🇪🇬 GMT+2: `{local_now.strftime('%H:%M')}`",
+        f"   ⏳ متبقي: `{session['hours_left']} ساعة تقريباً`",
+        f"",
+        f"📊 *طبيعة السيشن:*",
+        f"   {session['nature']}",
+        f"   {session['risk']}",
+        f"",
+        f"🥇 *الذهب في هذا السيشن:*",
+        f"   {session['gold']}",
+        f"",
+        f"💡 *نصيحة:*",
+        f"   {session['tip']}",
+        f"",
+        f"📈 *الإشارة الحالية:*",
+        f"   💰 السعر: *{fmt_price(price)}*",
+        f"   {'🟢 BULLISH' if dire=='BULLISH' else '🔴 BEARISH' if dire=='BEARISH' else '🟡 NEUTRAL'}",
+        f"   BUY {bs}/12 · SELL {ss}/12",
+        f"",
+        f"🔗 *التوافق مع السيشن:*",
+        f"   {compat}",
+        f"",
+        f"⏭ *القادم:*",
+        f"   {session['next']}",
+        f"",
+        f"╚══════════════════════════╝",
+    ]
+    return '\n'.join(lines)
+
+
+async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """أمر /session — تحليل السيشن الحالي"""
+    await update.message.reply_text("⏳ جاري تحليل السيشن...")
+    price = get_price_cached()
+    d     = fetch_ohlcv_cached('1h', 200)
+    if not price or not d:
+        await update.message.reply_text("❌ فشل جلب البيانات.")
+        return
+    sig = full_analysis(d)
+    await update.message.reply_text(
+        fmt_session_msg(price, sig),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_keyboard()
+    )
+
+
+async def notify_session_start(context):
+    """تنبيه تلقائي لما سيشن قوي يبدأ"""
+    if not alert_subscribers:
+        return
+    utc_hour = datetime.now(timezone.utc).hour
+    utc_min  = datetime.now(timezone.utc).minute
+
+    # بعت التنبيه بس في أول 5 دقائق من بداية السيشن
+    if utc_min > 5:
+        return
+
+    msg = None
+    if utc_hour == 8:
+        msg = ("🏦 *London Session بدأ!*\n\n"
+               "أعلى سيولة في اليوم 🔥\n"
+               "راقب الذهب — الاتجاه بيتحدد دلوقتي\n"
+               "✅ أفضل وقت للتداول")
+    elif utc_hour == 13:
+        msg = ("⚡ *London-NY Overlap بدأ!*\n\n"
+               "🔥 أقوى وقت في اليوم!\n"
+               "أعلى سيولة وأكبر حركة\n"
+               "🎯 فرص إشارات قوية الآن")
+    elif utc_hour == 0:
+        msg = ("🌏 *Asian Session بدأ*\n\n"
+               "⚠️ سيولة منخفضة\n"
+               "حركة محدودة في الذهب\n"
+               "انتظر London Session الساعة 08:00 UTC")
+
+    if msg:
+        price = get_price_cached()
+        if price:
+            msg += f"\n\n💰 السعر الحالي: *{fmt_price(price)}*"
+        for chat_id in list(alert_subscribers):
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id, text=msg,
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=main_keyboard()
+                )
+            except Exception as e:
+                log.warning(f"session notify error: {e}")
+
+
+async def track_sessions(context):
+    """يتتبع فتح وإغلاق كل سيشن ويبعت تقرير"""
+    if not alert_subscribers:
+        return
+    try:
+        price = get_price_cached()
+        if not price:
+            return
+
+        utc_hour = datetime.now(timezone.utc).hour
+        utc_min  = datetime.now(timezone.utc).minute
+
+        # تعريف السيشنات
+        sessions_config = {
+            'asian':   {'start': 0,  'end': 8,  'icon': '🌏', 'name': 'Asian Session'},
+            'london':  {'start': 8,  'end': 16, 'icon': '🏦', 'name': 'London Session'},
+            'newyork': {'start': 13, 'end': 21, 'icon': '🗽', 'name': 'New York Session'},
+        }
+
+        for key, cfg in sessions_config.items():
+            s = session_data[key]
+
+            # بداية السيشن (أول 5 دقائق)
+            if utc_hour == cfg['start'] and utc_min <= 5 and not s['active']:
+                s['open']   = price
+                s['high']   = price
+                s['low']    = price
+                s['active'] = True
+                s['start_time'] = now_local().strftime('%H:%M')
+
+                text = (
+                    f"{cfg['icon']} *{cfg['name']} — فتح السيشن*\n\n"
+                    f"🟢 سعر الفتح: *{fmt_price(price)}*\n"
+                    f"🕐 {now_local().strftime('%H:%M')} (GMT+2)\n\n"
+                    f"⏳ السيشن بدأ — سيتم إرسال تقرير الإغلاق بعد انتهائه"
+                )
+                for chat_id in list(alert_subscribers):
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id, text=text,
+                            parse_mode=ParseMode.MARKDOWN,
+                            reply_markup=main_keyboard()
+                        )
+                    except Exception as e:
+                        log.warning(f"session open notify error: {e}")
+
+            # تحديث High/Low أثناء السيشن
+            if s['active'] and cfg['start'] <= utc_hour < cfg['end']:
+                if s['high'] is None or price > s['high']:
+                    s['high'] = price
+                if s['low'] is None or price < s['low']:
+                    s['low'] = price
+
+            # نهاية السيشن (أول 5 دقائق بعد الإغلاق)
+            if utc_hour == cfg['end'] and utc_min <= 5 and s['active']:
+                s['active'] = False
+                close_price = price
+                open_price  = s['open'] or price
+                high_price  = s['high'] or price
+                low_price   = s['low']  or price
+                chg         = close_price - open_price
+                chg_pct     = (chg / open_price * 100) if open_price else 0
+                rng         = high_price - low_price
+                chg_icon    = '📈' if chg >= 0 else '📉'
+                sign        = '+' if chg >= 0 else ''
+
+                text = (
+                    f"{cfg['icon']} *{cfg['name']} — تقرير الإغلاق*\n\n"
+                    f"🟢 سعر الفتح:   *{fmt_price(open_price)}*\n"
+                    f"🔴 سعر الإغلاق: *{fmt_price(close_price)}*\n\n"
+                    f"{chg_icon} التغيير: *{sign}{chg:.2f}$ ({sign}{chg_pct:.2f}%)*\n\n"
+                    f"📊 أعلى سعر: `{fmt_price(high_price)}`\n"
+                    f"📊 أدنى سعر: `{fmt_price(low_price)}`\n"
+                    f"📏 النطاق:   `{rng:.2f}$`\n\n"
+                    f"{'🟢 سيشن صاعد' if chg >= 0 else '🔴 سيشن هابط'}\n"
+                    f"🕐 {now_local().strftime('%H:%M')} (GMT+2)"
+                )
+
+                # احفظ في MongoDB
+                db = get_db()
+                if db:
+                    try:
+                        db.sessions.insert_one({
+                            'session':  key,
+                            'name':     cfg['name'],
+                            'open':     open_price,
+                            'close':    close_price,
+                            'high':     high_price,
+                            'low':      low_price,
+                            'change':   round(chg, 2),
+                            'change_pct': round(chg_pct, 2),
+                            'range':    round(rng, 2),
+                            'date':     now_local().strftime('%Y-%m-%d'),
+                            'time':     now_local().isoformat(),
+                        })
+                    except Exception as e:
+                        log.warning(f"session save error: {e}")
+
+                for chat_id in list(alert_subscribers):
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id, text=text,
+                            parse_mode=ParseMode.MARKDOWN,
+                            reply_markup=main_keyboard()
+                        )
+                    except Exception as e:
+                        log.warning(f"session close notify error: {e}")
+
+                # reset
+                session_data[key] = {
+                    'open': None, 'high': None,
+                    'low': None, 'active': False
+                }
+
+    except Exception as e:
+        log.error(f"track_sessions error: {e}")
+
+
+async def cmd_session_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض تاريخ آخر 3 سيشنات من MongoDB"""
+    await update.message.reply_text("⏳ جاري جلب تاريخ السيشنات...")
+    db = get_db()
+    if not db:
+        await update.message.reply_text(
+            "❌ MongoDB غير متصل.",
+            reply_markup=main_keyboard()
+        )
+        return
+
+    try:
+        records = list(db.sessions.find().sort('time', -1).limit(6))
+        if not records:
+            await update.message.reply_text(
+                "📊 لا يوجد سيشنات مسجّلة بعد.\n"
+                "سيتم التسجيل تلقائياً عند فتح/إغلاق كل سيشن.",
+                reply_markup=main_keyboard()
+            )
+            return
+
+        lines = ["📋 *تاريخ آخر السيشنات:*\n"]
+        for r in records:
+            icon  = '🌏' if r['session']=='asian' else '🏦' if r['session']=='london' else '🗽'
+            chg_i = '📈' if r['change'] >= 0 else '📉'
+            sign  = '+' if r['change'] >= 0 else ''
+            lines.append(
+                f"{icon} *{r['name']}* — {r.get('date','')}\n"
+                f"   فتح: `{r['open']:.2f}` ← إغلاق: `{r['close']:.2f}`\n"
+                f"   {chg_i} {sign}{r['change']:.2f}$ ({sign}{r['change_pct']:.2f}%)\n"
+                f"   📏 نطاق: `{r['range']:.2f}$`\n"
+            )
+
+        await update.message.reply_text(
+            '\n'.join(lines),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_keyboard()
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطأ: {str(e)[:100]}")
+
+
+# ════════════════════════════════════════════════════════════════
 #  GROQ AI ANALYSIS (مجاني)
 # ════════════════════════════════════════════════════════════════
 
@@ -1108,6 +1491,8 @@ def main_keyboard():
         ],
         [
             InlineKeyboardButton("🏆 إحصائياتي",   callback_data="stats"),
+            InlineKeyboardButton("🕐 السيشن",       callback_data="session"),
+            InlineKeyboardButton("📋 تاريخ السيشن", callback_data="session_history"),
         ],
     ])
 
@@ -1447,6 +1832,50 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await query.message.reply_text("❌ فشل رسم الشارت.",
                                                reply_markup=main_keyboard())
+
+    elif data == "session_history":
+        db = get_db()
+        if not db:
+            await query.message.reply_text("❌ MongoDB غير متصل.",
+                                           reply_markup=main_keyboard())
+        else:
+            try:
+                records = list(db.sessions.find().sort('time', -1).limit(6))
+                if not records:
+                    text = ("📊 لا يوجد سيشنات مسجّلة بعد.\n"
+                            "سيتم التسجيل تلقائياً عند فتح/إغلاق كل سيشن.")
+                else:
+                    lines = ["📋 *تاريخ آخر السيشنات:*\n"]
+                    for r in records:
+                        icon  = '🌏' if r['session']=='asian' else '🏦' if r['session']=='london' else '🗽'
+                        chg_i = '📈' if r['change'] >= 0 else '📉'
+                        sign  = '+' if r['change'] >= 0 else ''
+                        lines.append(
+                            f"{icon} *{r['name']}* — {r.get('date','')}\n"
+                            f"   فتح: `{r['open']:.2f}` ← إغلاق: `{r['close']:.2f}`\n"
+                            f"   {chg_i} {sign}{r['change']:.2f}$ ({sign}{r['change_pct']:.2f}%)\n"
+                            f"   📏 نطاق: `{r['range']:.2f}$`\n"
+                        )
+                    text = '\n'.join(lines)
+                await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                               reply_markup=main_keyboard())
+            except Exception as e:
+                await query.message.reply_text(f"❌ خطأ: {str(e)[:100]}",
+                                               reply_markup=main_keyboard())
+
+    elif data == "session":
+        price = get_price_cached()
+        d     = fetch_ohlcv_cached('1h', 200)
+        if not price or not d:
+            await query.message.reply_text("❌ فشل جلب البيانات.",
+                                           reply_markup=main_keyboard())
+        else:
+            sig = full_analysis(d)
+            await query.message.reply_text(
+                fmt_session_msg(price, sig),
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=main_keyboard()
+            )
 
     elif data == "stats":
         chat_id = query.message.chat_id
@@ -1953,7 +2382,9 @@ def main():
     app.add_handler(CommandHandler("ai",        cmd_ai))
     app.add_handler(CommandHandler("chart",     cmd_chart))
     app.add_handler(CommandHandler("stats",     cmd_stats))
-    app.add_handler(CommandHandler("help",      cmd_help))
+    app.add_handler(CommandHandler("session",      cmd_session))
+    app.add_handler(CommandHandler("sessions",     cmd_session_history))
+    app.add_handler(CommandHandler("help",         cmd_help))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     # Jobs — async (no threading issues)
@@ -1968,6 +2399,10 @@ def main():
         jq.run_repeating(check_level_break, interval=600, first=180)
         # تحديث نتائج الإشارات كل 10 دقائق
         jq.run_repeating(lambda ctx: update_signals_result(), interval=600, first=60)
+        # تنبيه بداية السيشن كل 5 دقائق (يتحقق داخلياً)
+        jq.run_repeating(notify_session_start, interval=300, first=60)
+        # تتبع فتح/إغلاق السيشنات كل 5 دقائق
+        jq.run_repeating(track_sessions, interval=300, first=30)
         from datetime import time as dtime
         jq.run_daily(send_daily_report, time=dtime(7, 0))
         jq.run_daily(send_daily_report, time=dtime(20, 0))
