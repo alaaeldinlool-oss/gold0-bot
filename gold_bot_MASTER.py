@@ -454,60 +454,63 @@ def calc_egypt_gold(gold_usd: float, usd_egp: float) -> dict:
 
 def fmt_egypt_gold_msg(gold_usd: float) -> str:
     """رسالة أسعار الذهب المصري — من السوق المحلي مباشرة"""
-    # جرب تجيب الأسعار المحلية أولاً
     local = get_egypt_gold_prices()
 
     if local and local.get('gram_21_buy'):
-        # ✅ أسعار محلية حقيقية
         usd_egp  = local.get('dollar_bank') or local.get('dollar_sagha') or get_usd_egp() or 52.0
         g21_buy  = local['gram_21_buy']
         g21_sell = local.get('gram_21_sell') or g21_buy
         g18      = local.get('gram_18') or g21_buy * 0.857
         g24      = local.get('gram_24') or g21_buy * 1.143
-        g14      = g21_buy * 0.667
-        ounce    = g24 * 31.1035
-        d_sagha  = local.get('dollar_sagha', '')
-        sagha_line = f"💱 دولار الصاغة: *{d_sagha:.2f} جنيه*\n" if d_sagha else ""
+        g14      = round(g21_buy * 0.667)
+        ounce    = round(g24 * 31.1035)
+        d_sagha  = local.get('dollar_sagha')
 
         lines = [
-            "🇪🇬 *أسعار الذهب في مصر* 🔴 مباشر",
-            f"",
-            f"💵 الدولار (البنوك): *{usd_egp:.2f} جنيه*",
-            f"{sagha_line}🥇 الذهب عالمياً: *${gold_usd:,.2f}*",
-            f"",
-            f"📊 *سعر الجرام بالجنيه:*",
-            f"",
-            f"   🔸 عيار 24: *{g24:,.0f} جنيه*",
-            f"   🔸 عيار 21 (بيع): *{g21_buy:,.0f} جنيه*",
-            f"   🔸 عيار 21 (شراء): *{g21_sell:,.0f} جنيه*",
-            f"   🔸 عيار 18: *{g18:,.0f} جنيه*",
-            f"   🔸 عيار 14: *{g14:,.0f} جنيه*",
-            f"",
-            f"   🏅 الأوقية: *{ounce:,.0f} جنيه*",
-            f"",
-            f"📡 _المصدر: gold-price-live.com_",
-            f"🕐 {now_local().strftime('%H:%M:%S')} (GMT+2)",
+            "🇪🇬 *أسعار الذهب في مصر*",
+            "🔴 مباشر من السوق",
+            "",
+            f"💵 الدولار البنوك: *{usd_egp:.2f} جنيه*",
+        ]
+        if d_sagha:
+            lines.append(f"💱 دولار الصاغة: *{d_sagha:.2f} جنيه*")
+        lines += [
+            f"🥇 الذهب عالمياً: *${gold_usd:,.2f}*",
+            "",
+            "📊 *سعر الجرام:*",
+            "",
+            f"🔸 عيار 24:  *{g24:,.0f} جنيه*",
+            f"🔸 عيار 21 بيع: *{g21_buy:,.0f} جنيه*",
+            f"🔸 عيار 21 شراء: *{g21_sell:,.0f} جنيه*",
+            f"🔸 عيار 18: *{g18:,.0f} جنيه*",
+            f"🔸 عيار 14: *{g14:,.0f} جنيه*",
+            "",
+            f"🏅 الأوقية: *{ounce:,.0f} جنيه*",
+            "",
+            "📡 المصدر: gold-price-live.com",
+            f"🕐 {now_local().strftime('%H:%M:%S')} GMT+2",
         ]
     else:
-        # Fallback: حساب من السعر العالمي
         usd_egp = get_usd_egp() or 52.0
         eg = calc_egypt_gold(gold_usd, usd_egp)
         lines = [
-            "🇪🇬 *أسعار الذهب في مصر* ⚠️ تقريبي",
-            f"",
-            f"💵 سعر الدولار: *{usd_egp:.2f} جنيه*",
+            "🇪🇬 *أسعار الذهب في مصر*",
+            "⚠️ تقريبي",
+            "",
+            f"💵 الدولار: *{usd_egp:.2f} جنيه*",
             f"🥇 الذهب عالمياً: *${gold_usd:,.2f}*",
-            f"",
-            f"📊 *سعر الجرام بالجنيه (تقريبي):*",
-            f"",
-            f"   🔸 عيار 24: *{eg['gram_24']:,.0f} جنيه*",
-            f"   🔸 عيار 21: *{eg['gram_21']:,.0f} جنيه*",
-            f"   🔸 عيار 18: *{eg['gram_18']:,.0f} جنيه*",
-            f"   🔸 عيار 14: *{eg['gram_14']:,.0f} جنيه*",
-            f"",
-            f"⚠️ _فشل جلب السعر المحلي — الأسعار محسوبة_",
-            f"🕐 {now_local().strftime('%H:%M:%S')} (GMT+2)",
+            "",
+            "📊 *سعر الجرام تقريبي:*",
+            "",
+            f"🔸 عيار 24: *{eg['gram_24']:,.0f} جنيه*",
+            f"🔸 عيار 21: *{eg['gram_21']:,.0f} جنيه*",
+            f"🔸 عيار 18: *{eg['gram_18']:,.0f} جنيه*",
+            f"🔸 عيار 14: *{eg['gram_14']:,.0f} جنيه*",
+            "",
+            "⚠️ فشل جلب السعر المحلي",
+            f"🕐 {now_local().strftime('%H:%M:%S')} GMT+2",
         ]
+    return '\n'.join(lines)
     return '\n'.join(lines)
 
 # ════════════════════════════════════════════════════════════════
