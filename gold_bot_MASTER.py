@@ -345,67 +345,45 @@ def get_egypt_gold_prices() -> Optional[dict]:
                             headers={'User-Agent': 'Mozilla/5.0'})
         text = r.text
 
-        def find_price(patterns):
-            for pat in patterns:
-                m = re.search(pat, text)
-                if m:
-                    val = float(m.group(1).replace(',', ''))
-                    # تأكد إن القيمة معقولة
-                    if val > 100:
-                        return val
+        def get_table_price(karat):
+            # يدور في الجدول: ذهب عيار X | Y جنيه مصري | Z جنيه مصري
+            pat = rf'ذهب عيار {karat}\s*\|\s*(\d[\d,]+)\s*جنيه مصري\s*\|\s*(\d[\d,]+)\s*جنيه مصري'
+            m   = re.search(pat, text)
+            if m:
+                v1 = float(m.group(1).replace(',', ''))
+                v2 = float(m.group(2).replace(',', ''))
+                return max(v1, v2), min(v1, v2)
+            return None, None
+
+        def get_single(pattern):
+            m = re.search(pattern, text)
+            if m:
+                return float(m.group(1).replace(',', ''))
             return None
 
-        data = {
-            'gram_21_buy':  find_price([
-                r'عيار 21[^>]*>\s*(\d[\d,]+)\s*جنيه',
-                r'7[,\d]{3}\s*جنيه مصري.*?عيار 21',
-                r'(\d{4,5})\s*\n.*?عيار 21',
-            ]),
-            'gram_21_sell': find_price([
-                r'عيار 21.*?شراء.*?(\d[\d,]+)',
-            ]),
-            'gram_18': find_price([
-                r'عيار 18[^>]*>\s*(\d[\d,]+)\s*جنيه',
-            ]),
-            'gram_24': find_price([
-                r'عيار 24[^>]*>\s*(\d[\d,]+)\s*جنيه',
-            ]),
-            'dollar_bank':  find_price([
-                r'الدولار في البنوك[^>]*>\s*([\d.]+)\s*جنيه',
-                r'(5[0-9]\.\d+)\s*جنيه مصري.*?الدولار',
-            ]),
-            'dollar_sagha': find_price([
-                r'دولار الصاغة[^>]*>\s*([\d.]+)\s*جنيه',
-                r'(5[0-9]\.\d+)\s*جنيه مصري.*?الصاغة',
-            ]),
-        }
+        g24_buy, g24_sell   = get_table_price(24)
+        g21_buy, g21_sell   = get_table_price(21)
+        g18_buy, _          = get_table_price(18)
 
-        # استخرج من الجدول مباشرة — أدق
-        table_matches = re.findall(
-            r'عيار (\d+).*?(\d[\d,]+)\s*جنيه مصري.*?(\d[\d,]+)\s*جنيه مصري',
-            text, re.DOTALL
-        )
-        for match in table_matches:
-            karat, v1, v2 = match
-            val1 = float(v1.replace(',', ''))
-            val2 = float(v2.replace(',', ''))
-            # تأكد القيم معقولة (4000-12000)
-            if 4000 < val1 < 15000 and 4000 < val2 < 15000:
-                if karat == '21':
-                    data['gram_21_buy']  = max(val1, val2)
-                    data['gram_21_sell'] = min(val1, val2)
-                elif karat == '24':
-                    data['gram_24'] = max(val1, val2)
-                elif karat == '18':
-                    data['gram_18'] = max(val1, val2)
+        # سعر الدولار
+        dollar_bank  = get_single(r'الدولار في البنوك\s*\n\s*([\d.]+)\s*جنيه مصري')
+        dollar_sagha = get_single(r'دولار الصاغة الآن\s*\n\s*([\d.]+)\s*جنيه مصري')
 
-        # تحقق من صحة البيانات قبل الحفظ
-        if data.get('gram_21_buy') and 4000 < data['gram_21_buy'] < 15000:
+        # تحقق من صحة البيانات
+        if g21_buy and 4000 < g21_buy < 15000:
+            data = {
+                'gram_21_buy':  g21_buy,
+                'gram_21_sell': g21_sell,
+                'gram_24':      g24_buy,
+                'gram_18':      g18_buy,
+                'dollar_bank':  dollar_bank,
+                'dollar_sagha': dollar_sagha,
+            }
             _egypt_gold_cache = {'data': data, 'time': now_t}
-            log.info(f"✅ Egypt gold: 21k={data['gram_21_buy']}")
+            log.info(f"✅ Egypt gold: 21k={g21_buy}, USD={dollar_bank}")
             return data
         else:
-            log.warning(f"Egypt gold invalid data: {data}")
+            log.warning(f"Egypt gold: invalid 21k={g21_buy}")
     except Exception as e:
         log.warning(f"Egypt gold scrape failed: {e}")
     return None
@@ -2497,11 +2475,31 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "egypt":
         await query.message.reply_text("⏳ جاري جلب أسعار الذهب المصري...",
                                        reply_markup=main_keyboard())
-        price = get_price_cached()
-        if not price:
-            text = "❌ فشل جلب السعر العالمي."
-        else:
-            text = fmt_egypt_gold_msg(price)
+        try:
+            price = get_price_cached()
+            if not price:
+                text = "❌ فشل جلب السعر العالمي."
+            else:
+                # شغّل الـ scraping في thread منفصل مع timeout 15 ثانية
+                loop = asyncio.get_event_loop()
+                text = await asyncio.wait_for(
+                    loop.run_in_executor(None, fmt_egypt_gold_msg, price),
+                    timeout=15.0
+                )
+        except asyncio.TimeoutError:
+            price = get_price_cached() or 0
+            usd_egp = get_usd_egp() or 52.0
+            eg = calc_egypt_gold(price, usd_egp)
+            text = (
+                f"🇪🇬 *أسعار الذهب في مصر* ⚠️ تقريبي\n\n"
+                f"💵 الدولار: *{usd_egp:.2f} جنيه*\n"
+                f"🥇 الذهب: *${price:,.2f}*\n\n"
+                f"🔸 عيار 21: *{eg['gram_21']:,.0f} جنيه*\n"
+                f"🔸 عيار 18: *{eg['gram_18']:,.0f} جنيه*\n\n"
+                f"⚠️ _انتهت مهلة جلب السعر المحلي_"
+            )
+        except Exception as e:
+            text = f"❌ خطأ: {str(e)[:100]}"
         await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
@@ -2860,13 +2858,31 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_egypt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """أسعار الذهب في مصر"""
     await update.message.reply_text("⏳ جاري جلب أسعار الذهب المصري...")
-    price = get_price_cached()
-    if not price:
-        await update.message.reply_text("❌ فشل جلب السعر العالمي.")
-        return
+    try:
+        price = get_price_cached()
+        if not price:
+            await update.message.reply_text("❌ فشل جلب السعر العالمي.")
+            return
+        loop = asyncio.get_event_loop()
+        text = await asyncio.wait_for(
+            loop.run_in_executor(None, fmt_egypt_gold_msg, price),
+            timeout=15.0
+        )
+    except asyncio.TimeoutError:
+        price   = get_price_cached() or 0
+        usd_egp = get_usd_egp() or 52.0
+        eg      = calc_egypt_gold(price, usd_egp)
+        text    = (
+            f"🇪🇬 *أسعار الذهب في مصر* ⚠️ تقريبي\n\n"
+            f"💵 الدولار: *{usd_egp:.2f} جنيه*\n\n"
+            f"🔸 عيار 21: *{eg['gram_21']:,.0f} جنيه*\n"
+            f"🔸 عيار 18: *{eg['gram_18']:,.0f} جنيه*\n\n"
+            f"⚠️ _انتهت مهلة جلب السعر المحلي_"
+        )
+    except Exception as e:
+        text = f"❌ خطأ: {str(e)[:100]}"
     await update.message.reply_text(
-        fmt_egypt_gold_msg(price),
-        parse_mode=ParseMode.MARKDOWN,
+        text, parse_mode=ParseMode.MARKDOWN,
         reply_markup=main_keyboard()
     )
 
