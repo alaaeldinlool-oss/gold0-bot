@@ -3076,6 +3076,9 @@ def main():
 
     app = (ApplicationBuilder()
            .token(TELEGRAM_TOKEN)
+           .connect_timeout(30)
+           .read_timeout(30)
+           .write_timeout(30)
            .build())
 
     # Commands
@@ -3129,7 +3132,17 @@ def main():
         jq.run_daily(send_daily_report, time=dtime(20, 0))
 
     print("✅ Bot is running! Press Ctrl+C to stop.")
-    app.run_polling(drop_pending_updates=True)
+    try:
+        app.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=["message", "callback_query"],
+            close_loop=False,
+        )
+    except KeyboardInterrupt:
+        print("🛑 Bot stopped by user.")
+    except Exception as e:
+        log.error(f"Bot error: {e}")
+        raise
 
 if __name__ == "__main__":
     main()
