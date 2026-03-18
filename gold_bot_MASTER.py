@@ -3101,7 +3101,9 @@ def main():
         # Level break check every 2 minutes
         jq.run_repeating(check_level_break, interval=600, first=180)
         # تحديث نتائج الإشارات كل 10 دقائق
-        jq.run_repeating(lambda ctx: update_signals_result(), interval=600, first=60)
+        async def _update_signals(ctx):
+            update_signals_result()
+        jq.run_repeating(_update_signals, interval=600, first=60)
         # تنبيه بداية السيشن كل 5 دقائق (يتحقق داخلياً)
         jq.run_repeating(notify_session_start, interval=300, first=60)
         # تتبع فتح/إغلاق السيشنات كل 5 دقائق
