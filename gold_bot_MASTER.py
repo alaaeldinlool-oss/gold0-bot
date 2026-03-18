@@ -1610,7 +1610,7 @@ EMA Stack: {'صاعدة' if sig['ema_bull'] else 'هابطة' if sig['ema_bear']
 # ════════════════════════════════════════════════════════════════
 
 def detect_trendlines(highs: list, lows: list, n: int):
-    """كشف Trendlines تلقائياً — محدودة داخل الشارت"""
+    """كشف Trendlines — من أول لآخر Swing Point في الشارت كله"""
     swing_lows  = [(i, lows[i])  for i in range(2, n-2)
                    if lows[i]  < lows[i-1]  and lows[i]  < lows[i-2]
                    and lows[i]  < lows[i+1]  and lows[i]  < lows[i+2]]
@@ -1624,15 +1624,16 @@ def detect_trendlines(highs: list, lows: list, n: int):
     y_min       = min(lows)  - price_range * 0.05
     y_max       = max(highs) + price_range * 0.05
 
-    # Uptrend — يوصل آخر Swing Low باللي قبله
+    # Uptrend — من أول Swing Low لآخر Swing Low
     if len(swing_lows) >= 2:
-        p1, p2 = swing_lows[-2], swing_lows[-1]
+        p1 = swing_lows[0]   # أول نقطة
+        p2 = swing_lows[-1]  # آخر نقطة
         if p2[0] > p1[0]:
             slope = (p2[1] - p1[1]) / (p2[0] - p1[0])
-            # امتد 8 شمعات بعد p2 بس
-            x_end = min(p2[0] + 8, n - 1)
+            # امتد 5 شمعات بعد آخر نقطة
+            x_end = min(p2[0] + 5, n - 1)
             y_end = p2[1] + slope * (x_end - p2[0])
-            if y_min <= y_end <= y_max:
+            if y_min <= y_end <= y_max and y_min <= p1[1] <= y_max:
                 trendlines.append({
                     'type':  'up',
                     'x1': p1[0], 'y1': p1[1],
@@ -1641,14 +1642,15 @@ def detect_trendlines(highs: list, lows: list, n: int):
                     'label': '📈 Uptrend',
                 })
 
-    # Downtrend — يوصل آخر Swing High باللي قبله
+    # Downtrend — من أول Swing High لآخر Swing High
     if len(swing_highs) >= 2:
-        p1, p2 = swing_highs[-2], swing_highs[-1]
+        p1 = swing_highs[0]   # أول نقطة
+        p2 = swing_highs[-1]  # آخر نقطة
         if p2[0] > p1[0]:
             slope = (p2[1] - p1[1]) / (p2[0] - p1[0])
-            x_end = min(p2[0] + 8, n - 1)
+            x_end = min(p2[0] + 5, n - 1)
             y_end = p2[1] + slope * (x_end - p2[0])
-            if y_min <= y_end <= y_max:
+            if y_min <= y_end <= y_max and y_min <= p1[1] <= y_max:
                 trendlines.append({
                     'type':  'down',
                     'x1': p1[0], 'y1': p1[1],
