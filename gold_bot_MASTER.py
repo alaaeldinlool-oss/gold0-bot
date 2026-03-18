@@ -924,7 +924,7 @@ def fmt_pivots_msg(pivots: dict, fib: dict, price: float) -> str:
 
     lines = [
         "╔══ 📌 Pivot Points ══╗",
-        f"💰 السعر: *{fmt_price(price)}* — [{zone}]",
+        f"💰 السعر: *{fmt_price(price)}* - [{zone}]",
         "",
         "```",
         f"R3: {f(pivots['R3'])}  (+{(pivots['R3']-price)/price*100:.2f}%)",
@@ -1223,10 +1223,10 @@ async def track_sessions(context):
                 s['start_time'] = now_local().strftime('%H:%M')
 
                 text = (
-                    f"{cfg['icon']} *{cfg['name']} — فتح السيشن*\n\n"
+                    f"{cfg['icon']} *{cfg['name']} - فتح السيشن*\n\n"
                     f"🟢 سعر الفتح: *{fmt_price(price)}*\n"
                     f"🕐 {now_local().strftime('%H:%M')} (GMT+2)\n\n"
-                    f"⏳ السيشن بدأ — سيتم إرسال تقرير الإغلاق بعد انتهائه"
+                    f"⏳ السيشن بدأ - سيتم إرسال تقرير الإغلاق بعد انتهائه"
                 )
                 for chat_id in list(alert_subscribers):
                     try:
@@ -1259,7 +1259,7 @@ async def track_sessions(context):
                 sign        = '+' if chg >= 0 else ''
 
                 text = (
-                    f"{cfg['icon']} *{cfg['name']} — تقرير الإغلاق*\n\n"
+                    f"{cfg['icon']} *{cfg['name']} - تقرير الإغلاق*\n\n"
                     f"🟢 سعر الفتح:   *{fmt_price(open_price)}*\n"
                     f"🔴 سعر الإغلاق: *{fmt_price(close_price)}*\n\n"
                     f"{chg_icon} التغيير: *{sign}{chg:.2f}$ ({sign}{chg_pct:.2f}%)*\n\n"
@@ -1337,7 +1337,7 @@ async def cmd_session_history(update: Update, context: ContextTypes.DEFAULT_TYPE
             chg_i = '📈' if r['change'] >= 0 else '📉'
             sign  = '+' if r['change'] >= 0 else ''
             lines.append(
-                f"{icon} *{r['name']}* — {r.get('date','')}\n"
+                f"{icon} *{r['name']}* - {r.get('date','')}\n"
                 f"   فتح: `{r['open']:.2f}` ← إغلاق: `{r['close']:.2f}`\n"
                 f"   {chg_i} {sign}{r['change']:.2f}$ ({sign}{r['change_pct']:.2f}%)\n"
                 f"   📏 نطاق: `{r['range']:.2f}$`\n"
@@ -1545,7 +1545,7 @@ def fmt_weekly_msg(report: dict, prev: dict = None, label: str = "هذا الأ�
     source    = "📡 مباشر" if report.get('source') == 'live' else "💾 قاعدة بيانات"
 
     lines = [
-        f"📅 *التقرير الأسبوعي — {label}*",
+        f"📅 *التقرير الأسبوعي - {label}*",
         f"📆 {report['week_start']} ← {report['week_end']}",
         f"📊 {days_done}/5 أيام  {source}",
         f"",
@@ -2253,7 +2253,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 bs   = sig.get("buyScore",0)
                 ss   = sig.get("sellScore",0)
                 icon = "🟢" if dire=="BULLISH" else "🔴" if dire=="BEARISH" else "🟡"
-                lines.append(f"{icon} *{tf_name}* — {dire} · BUY {bs} SELL {ss}")
+                lines.append(f"{icon} *{tf_name}* - {dire} · BUY {bs} SELL {ss}")
         await query.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
 
@@ -2326,11 +2326,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if obs:
                 lines.append("📦 *Order Blocks:*")
                 for ob in obs[-3:]:
-                    lines.append(f"  {'🟦' if ob.get('type')=='BULL_OB' else '🟥'} {ob.get('label','OB')}: `{ob.get('bottom',0):.3f}` — `{ob.get('top',0):.3f}`")
+                    lines.append(f"  {'🟦' if ob.get('type')=='BULL_OB' else '🟥'} {ob.get('label','OB')}: `{ob.get('bottom',0):.3f}` - `{ob.get('top',0):.3f}`")
             if fvgs:
                 lines.append("\n⬜ *Fair Value Gaps:*")
                 for fvg in fvgs[-3:]:
-                    lines.append(f"  {'⬆️' if fvg.get('type')=='BULL' else '⬇️'} {fvg.get('label','FVG')}: `{fvg.get('bottom',0):.3f}` — `{fvg.get('top',0):.3f}`")
+                    lines.append(f"  {'⬆️' if fvg.get('type')=='BULL' else '⬇️'} {fvg.get('label','FVG')}: `{fvg.get('bottom',0):.3f}` - `{fvg.get('top',0):.3f}`")
             if not obs and not fvgs:
                 lines.append("لا أنماط SMC واضحة حالياً")
             text = "\n".join(lines)
@@ -2389,7 +2389,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for a in user_alerts:
                 icon = "↑" if a["type"]=="above" else "↓"
                 done = "✅" if a.get("triggered") else "⏳"
-                lines.append(f"{done} {icon} `{a['price']:.3f}` — {a.get('label','')}")
+                lines.append(f"{done} {icon} `{a['price']:.3f}` - {a.get('label','')}")
             text = "\n".join(lines)
         await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
                                        reply_markup=main_keyboard())
@@ -2532,7 +2532,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         chg_i = '📈' if r['change'] >= 0 else '📉'
                         sign  = '+' if r['change'] >= 0 else ''
                         lines.append(
-                            f"{icon} *{r['name']}* — {r.get('date','')}\n"
+                            f"{icon} *{r['name']}* - {r.get('date','')}\n"
                             f"   فتح: `{r['open']:.2f}` ← إغلاق: `{r['close']:.2f}`\n"
                             f"   {chg_i} {sign}{r['change']:.2f}$ ({sign}{r['change_pct']:.2f}%)\n"
                             f"   📏 نطاق: `{r['range']:.2f}$`\n"
@@ -2809,7 +2809,7 @@ async def cmd_alerts_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["📋 *الـ Alerts المضبوطة:*\n"]
     for i, a in enumerate(alerts, 1):
         status = '✅ تم' if a['triggered'] else '⏳ منتظر'
-        lines.append(f"{i}. {'↑' if a['type']=='above' else '↓'} {fmt_price(a['price'])} — {status}")
+        lines.append(f"{i}. {'↑' if a['type']=='above' else '↓'} {fmt_price(a['price'])} - {status}")
         if a.get('label'): lines.append(f"   {a['label']}")
     await update.message.reply_text('\n'.join(lines), parse_mode=ParseMode.MARKDOWN)
 
@@ -2929,7 +2929,7 @@ async def auto_hourly_signal(context):
         sl  = price - atr     if dire == "BULLISH" else price + atr
 
         text = (
-            f"{icon} *تحديث ساعي — GOLD*\n"
+            f"{icon} *تحديث ساعي - GOLD*\n"
             f"🕐 {now_local().strftime('%H:%M') + ' (GMT+2)'} UTC\n\n"
             f"💰 السعر: *{fmt_price(price)}*\n"
             f"📊 الاتجاه: *{dire}*\n"
@@ -3040,11 +3040,11 @@ async def check_level_break(context):
 
         # R1 break (bullish)
         if last_price < R1 <= price:
-            alerts_to_send.append(f"🚀 اختراق R1: `{R1:.3f}` — إشارة صاعدة قوية!")
+            alerts_to_send.append(f"🚀 اختراق R1: `{R1:.3f}` - إشارة صاعدة قوية!")
 
         # S1 break (bearish)
         if last_price > S1 >= price:
-            alerts_to_send.append(f"⚠️ كسر S1: `{S1:.3f}` — إشارة هابطة!")
+            alerts_to_send.append(f"⚠️ كسر S1: `{S1:.3f}` - إشارة هابطة!")
 
         if alerts_to_send:
             text = (
