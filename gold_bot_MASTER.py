@@ -331,9 +331,16 @@ def get_price() -> Optional[float]:
         d = fetch_ohlcv('1min', 5)
         return d['close'][-1] if d else None
 
+_usd_egp_cache = {'rate': None, 'time': 0}
+
 def get_usd_egp() -> Optional[float]:
-    """جيب سعر الدولار مقابل الجنيه المصري"""
-    # نجرب مصادر متعددة
+    """جيب سعر الدولار — بيتحدث كل 30 دقيقة"""
+    global _usd_egp_cache
+    now = time.time()
+    # لو في cache أقل من 30 دقيقة ارجعه
+    if _usd_egp_cache['rate'] and now - _usd_egp_cache['time'] < 1800:
+        return _usd_egp_cache['rate']
+
     sources = [
         "https://api.exchangerate-api.com/v4/latest/USD",
         "https://open.er-api.com/v6/latest/USD",
@@ -342,15 +349,19 @@ def get_usd_egp() -> Optional[float]:
         try:
             r = requests.get(url, timeout=8)
             data = r.json()
-            # exchangerate-api format
+            rate = None
             if 'rates' in data:
-                return float(data['rates']['EGP'])
-            # open.er-api format
-            if 'conversion_rates' in data:
-                return float(data['conversion_rates']['EGP'])
+                rate = float(data['rates']['EGP'])
+            elif 'conversion_rates' in data:
+                rate = float(data['conversion_rates']['EGP'])
+            if rate:
+                _usd_egp_cache = {'rate': rate, 'time': now}
+                log.info(f"USD/EGP updated: {rate}")
+                return rate
         except:
             continue
-    return None
+    # لو فشل رجّع آخر قيمة محفوظة
+    return _usd_egp_cache['rate']
 
 def calc_egypt_gold(gold_usd: float, usd_egp: float) -> dict:
     """
@@ -1610,7 +1621,7 @@ EMA Stack: {'صاعدة' if sig['ema_bull'] else 'هابطة' if sig['ema_bear']
 # ════════════════════════════════════════════════════════════════
 
 def detect_trendlines(highs: list, lows: list, n: int):
-    """كشف Trendlines — من أول لآخر Swing Point في الشارت كله"""
+    """كشف Trendlines صحيح — Uptrend من أدنى low لآخر low صاعد"""
     swing_lows  = [(i, lows[i])  for i in range(2, n-2)
                    if lows[i]  < lows[i-1]  and lows[i]  < lows[i-2]
                    and lows[i]  < lows[i+1]  and lows[i]  < lows[i+2]]
@@ -1624,16 +1635,18 @@ def detect_trendlines(highs: list, lows: list, n: int):
     y_min       = min(lows)  - price_range * 0.05
     y_max       = max(highs) + price_range * 0.05
 
-    # Uptrend — من أول Swing Low لآخر Swing Low
+    # Uptrend — من أدنى Swing Low لآخر Swing Low
+    # (الخط لازم يكون صاعد = آخر نقطة أعلى من الأولى)
     if len(swing_lows) >= 2:
-        p1 = swing_lows[0]   # أول نقطة
-        p2 = swing_lows[-1]  # آخر نقطة
-        if p2[0] > p1[0]:
+        p2 = swing_lows[-1]  # آخر نقطة دايماً
+        # دور على أول نقطة أدنى منها
+        candidates = [p for p in swing_lows[:-1] if p[1] < p2[1] and p[0] < p2[0]]
+        if candidates:
+            p1 = min(candidates, key=lambda x: x[1])  # أدنى نقطة
             slope = (p2[1] - p1[1]) / (p2[0] - p1[0])
-            # امتد 5 شمعات بعد آخر نقطة
             x_end = min(p2[0] + 5, n - 1)
             y_end = p2[1] + slope * (x_end - p2[0])
-            if y_min <= y_end <= y_max and y_min <= p1[1] <= y_max:
+            if y_min <= y_end <= y_max:
                 trendlines.append({
                     'type':  'up',
                     'x1': p1[0], 'y1': p1[1],
@@ -1642,15 +1655,18 @@ def detect_trendlines(highs: list, lows: list, n: int):
                     'label': '📈 Uptrend',
                 })
 
-    # Downtrend — من أول Swing High لآخر Swing High
+    # Downtrend — من أعلى Swing High لآخر Swing High
+    # (الخط لازم يكون هابط = آخر نقطة أدنى من الأولى)
     if len(swing_highs) >= 2:
-        p1 = swing_highs[0]   # أول نقطة
-        p2 = swing_highs[-1]  # آخر نقطة
-        if p2[0] > p1[0]:
+        p2 = swing_highs[-1]  # آخر نقطة دايماً
+        # دور على أول نقطة أعلى منها
+        candidates = [p for p in swing_highs[:-1] if p[1] > p2[1] and p[0] < p2[0]]
+        if candidates:
+            p1 = max(candidates, key=lambda x: x[1])  # أعلى نقطة
             slope = (p2[1] - p1[1]) / (p2[0] - p1[0])
             x_end = min(p2[0] + 5, n - 1)
             y_end = p2[1] + slope * (x_end - p2[0])
-            if y_min <= y_end <= y_max and y_min <= p1[1] <= y_max:
+            if y_min <= y_end <= y_max:
                 trendlines.append({
                     'type':  'down',
                     'x1': p1[0], 'y1': p1[1],
