@@ -1471,10 +1471,13 @@ def fmt_weekly_msg(report: dict, prev: dict = None, label: str = "هذا الأ�
     if days_done >= 2:
         bb = report['best_buy']
         bs = report['best_sell']
+        bb_sign = '+' if bb['change'] >= 0 else ''
+        bs_sign = '+' if bs['change'] >= 0 else ''
+        bb_label = "أقل خسارة" if bb['change'] < 0 else "أفضل ربح"
         lines += [
             f"",
-            f"🏆 *أفضل شراء:* {bb['day_name']} `+{bb['change']:.2f}$`",
-            f"📉 *أفضل بيع:*  {bs['day_name']} `{bs['change']:.2f}$`",
+            f"🏆 *أفضل شراء* ({bb_label}): {bb['day_name']} `{bb_sign}{bb['change']:.2f}$`",
+            f"📉 *أفضل بيع:* {bs['day_name']} `{bs_sign}{bs['change']:.2f}$`",
         ]
 
     if prev and prev.get('total_chg') is not None:
