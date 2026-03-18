@@ -322,6 +322,74 @@ def get_price() -> Optional[float]:
         d = fetch_ohlcv('1min', 5)
         return d['close'][-1] if d else None
 
+def get_usd_egp() -> Optional[float]:
+    """جيب سعر الدولار مقابل الجنيه المصري"""
+    # نجرب مصادر متعددة
+    sources = [
+        "https://api.exchangerate-api.com/v4/latest/USD",
+        "https://open.er-api.com/v6/latest/USD",
+    ]
+    for url in sources:
+        try:
+            r = requests.get(url, timeout=8)
+            data = r.json()
+            # exchangerate-api format
+            if 'rates' in data:
+                return float(data['rates']['EGP'])
+            # open.er-api format
+            if 'conversion_rates' in data:
+                return float(data['conversion_rates']['EGP'])
+        except:
+            continue
+    return None
+
+def calc_egypt_gold(gold_usd: float, usd_egp: float) -> dict:
+    """
+    احسب سعر الذهب المصري بكل العيارات
+    gold_usd = سعر الأوقية بالدولار
+    usd_egp  = سعر الدولار بالجنيه
+    """
+    # 1 أوقية = 31.1035 جرام
+    gram_24 = (gold_usd / 31.1035) * usd_egp
+
+    return {
+        'usd_egp': usd_egp,
+        'gram_24': gram_24,
+        'gram_21': gram_24 * 0.875,
+        'gram_18': gram_24 * 0.750,
+        'gram_14': gram_24 * 0.585,
+        'ounce':   gold_usd * usd_egp,
+    }
+
+def fmt_egypt_gold_msg(gold_usd: float) -> str:
+    """رسالة أسعار الذهب المصري"""
+    usd_egp = get_usd_egp()
+    if not usd_egp:
+        return "❌ فشل جلب سعر الدولار. جرب مرة أخرى."
+
+    eg = calc_egypt_gold(gold_usd, usd_egp)
+
+    lines = [
+        "╔══ 🇪🇬 أسعار الذهب في مصر ══╗",
+        f"",
+        f"💵 سعر الدولار: *{eg['usd_egp']:.2f} جنيه*",
+        f"🥇 الذهب عالمياً: *${gold_usd:,.2f}*",
+        f"",
+        f"📊 *سعر الجرام بالجنيه:*",
+        f"",
+        f"   🔸 عيار 24: *{eg['gram_24']:,.0f} جنيه*",
+        f"   🔸 عيار 21: *{eg['gram_21']:,.0f} جنيه*",
+        f"   🔸 عيار 18: *{eg['gram_18']:,.0f} جنيه*",
+        f"   🔸 عيار 14: *{eg['gram_14']:,.0f} جنيه*",
+        f"",
+        f"   🏅 الأوقية (31.1 جم): *{eg['ounce']:,.0f} جنيه*",
+        f"",
+        f"⚠️ _الأسعار تقريبية — بتختلف من محل لمحل_",
+        f"🕐 {now_local().strftime('%H:%M:%S')} (GMT+2)",
+        "╚══════════════════════════════╝",
+    ]
+    return '\n'.join(lines)
+
 # ════════════════════════════════════════════════════════════════
 #  INDICATORS — Correct implementations
 # ════════════════════════════════════════════════════════════════
@@ -1494,6 +1562,9 @@ def main_keyboard():
             InlineKeyboardButton("🕐 السيشن",       callback_data="session"),
             InlineKeyboardButton("📋 تاريخ السيشن", callback_data="session_history"),
         ],
+        [
+            InlineKeyboardButton("🇪🇬 ذهب مصر",    callback_data="egypt"),
+        ],
     ])
 
 
@@ -1832,6 +1903,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await query.message.reply_text("❌ فشل رسم الشارت.",
                                                reply_markup=main_keyboard())
+
+    elif data == "egypt":
+        await query.message.reply_text("⏳ جاري جلب أسعار الذهب المصري...",
+                                       reply_markup=main_keyboard())
+        price = get_price_cached()
+        if not price:
+            text = "❌ فشل جلب السعر العالمي."
+        else:
+            text = fmt_egypt_gold_msg(price)
+        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                                       reply_markup=main_keyboard())
 
     elif data == "session_history":
         db = get_db()
@@ -2185,6 +2267,19 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard()
     )
 
+async def cmd_egypt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """أسعار الذهب في مصر"""
+    await update.message.reply_text("⏳ جاري جلب أسعار الذهب المصري...")
+    price = get_price_cached()
+    if not price:
+        await update.message.reply_text("❌ فشل جلب السعر العالمي.")
+        return
+    await update.message.reply_text(
+        fmt_egypt_gold_msg(price),
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_keyboard()
+    )
+
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_start(update, context)
 
@@ -2384,6 +2479,7 @@ def main():
     app.add_handler(CommandHandler("stats",     cmd_stats))
     app.add_handler(CommandHandler("session",      cmd_session))
     app.add_handler(CommandHandler("sessions",     cmd_session_history))
+    app.add_handler(CommandHandler("egypt",        cmd_egypt))
     app.add_handler(CommandHandler("help",         cmd_help))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
