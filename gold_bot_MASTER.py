@@ -1579,63 +1579,51 @@ EMA Stack: {'صاعدة' if sig['ema_bull'] else 'هابطة' if sig['ema_bear']
 # ════════════════════════════════════════════════════════════════
 
 def detect_trendlines(highs: list, lows: list, n: int):
-    """كشف Trendlines تلقائياً من الـ Swing Highs/Lows"""
-    # إيجاد Swing Lows (للـ Uptrend)
+    """كشف Trendlines تلقائياً — محدودة داخل الشارت"""
     swing_lows  = [(i, lows[i])  for i in range(2, n-2)
-                   if lows[i] < lows[i-1] and lows[i] < lows[i-2]
-                   and lows[i] < lows[i+1] and lows[i] < lows[i+2]]
+                   if lows[i]  < lows[i-1]  and lows[i]  < lows[i-2]
+                   and lows[i]  < lows[i+1]  and lows[i]  < lows[i+2]]
 
-    # إيجاد Swing Highs (للـ Downtrend)
     swing_highs = [(i, highs[i]) for i in range(2, n-2)
                    if highs[i] > highs[i-1] and highs[i] > highs[i-2]
                    and highs[i] > highs[i+1] and highs[i] > highs[i+2]]
 
-    trendlines = []
+    trendlines  = []
+    price_range = max(highs) - min(lows)
+    y_min       = min(lows)  - price_range * 0.05
+    y_max       = max(highs) + price_range * 0.05
 
-    # Uptrend line — يوصل آخر Swing Low باللي قبله
+    # Uptrend — يوصل آخر Swing Low باللي قبله
     if len(swing_lows) >= 2:
         p1, p2 = swing_lows[-2], swing_lows[-1]
-        slope  = (p2[1] - p1[1]) / (p2[0] - p1[0]) if p2[0] != p1[0] else 0
-        # امتد للنهاية
-        x_end  = n - 1
-        y_end  = p2[1] + slope * (x_end - p2[0])
-        trendlines.append({
-            'type':  'up',
-            'x1': p1[0], 'y1': p1[1],
-            'x2': x_end, 'y2': y_end,
-            'color': '#26a69a',
-            'label': '📈 Uptrend',
-        })
+        if p2[0] > p1[0]:
+            slope = (p2[1] - p1[1]) / (p2[0] - p1[0])
+            # امتد 8 شمعات بعد p2 بس
+            x_end = min(p2[0] + 8, n - 1)
+            y_end = p2[1] + slope * (x_end - p2[0])
+            if y_min <= y_end <= y_max:
+                trendlines.append({
+                    'type':  'up',
+                    'x1': p1[0], 'y1': p1[1],
+                    'x2': x_end, 'y2': y_end,
+                    'color': '#26a69a',
+                    'label': '📈 Uptrend',
+                })
 
-    # Downtrend line — يوصل آخر Swing High باللي قبله
+    # Downtrend — يوصل آخر Swing High باللي قبله
     if len(swing_highs) >= 2:
         p1, p2 = swing_highs[-2], swing_highs[-1]
-        slope  = (p2[1] - p1[1]) / (p2[0] - p1[0]) if p2[0] != p1[0] else 0
-        x_end  = n - 1
-        y_end  = p2[1] + slope * (x_end - p2[0])
-        trendlines.append({
-            'type':  'down',
-            'x1': p1[0], 'y1': p1[1],
-            'x2': x_end, 'y2': y_end,
-            'color': '#ef5350',
-            'label': '📉 Downtrend',
-        })
-
-    # Channel — لو في Uptrend نرسم الـ channel فوقه
-    if len(swing_lows) >= 2 and len(swing_highs) >= 2:
-        up   = [t for t in trendlines if t['type'] == 'up']
-        down = [t for t in trendlines if t['type'] == 'down']
-        if up and down:
-            # هل الاتجاهين متوازيين تقريباً؟
-            up_slope   = (up[0]['y2']   - up[0]['y1'])   / max(up[0]['x2']   - up[0]['x1'], 1)
-            down_slope = (down[0]['y2'] - down[0]['y1']) / max(down[0]['x2'] - down[0]['x1'], 1)
-            if abs(up_slope - down_slope) < abs(up_slope) * 0.5:
+        if p2[0] > p1[0]:
+            slope = (p2[1] - p1[1]) / (p2[0] - p1[0])
+            x_end = min(p2[0] + 8, n - 1)
+            y_end = p2[1] + slope * (x_end - p2[0])
+            if y_min <= y_end <= y_max:
                 trendlines.append({
-                    'type':  'channel',
-                    'x1': up[0]['x1'], 'y1': up[0]['y1'],
-                    'x2': up[0]['x2'], 'y2': up[0]['y2'],
-                    'color': '#ff9800',
-                    'label': '↔️ Channel',
+                    'type':  'down',
+                    'x1': p1[0], 'y1': p1[1],
+                    'x2': x_end, 'y2': y_end,
+                    'color': '#ef5350',
+                    'label': '📉 Downtrend',
                 })
 
     return trendlines
