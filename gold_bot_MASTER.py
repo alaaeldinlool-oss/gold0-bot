@@ -334,40 +334,48 @@ def get_price() -> Optional[float]:
 _usd_egp_cache = {'rate': None, 'time': 0}
 
 def get_usd_egp() -> Optional[float]:
-    """جيب سعر الدولار — بيتحدث كل 30 دقيقة"""
+    """جيب سعر الدولار — من TwelveData أو APIs مجانية"""
     global _usd_egp_cache
     now_t = time.time()
-    # لو في cache أقل من 30 دقيقة ارجعه
     if _usd_egp_cache['rate'] and now_t - _usd_egp_cache['time'] < 1800:
         return _usd_egp_cache['rate']
 
+    # ── المصدر الأول: TwelveData (نفس الـ API Key بتاعنا) ──
+    try:
+        url  = f"https://api.twelvedata.com/price?symbol=USD/EGP&apikey={TWELVEDATA_KEY}"
+        r    = requests.get(url, timeout=8)
+        data = r.json()
+        if 'price' in data:
+            rate = float(data['price'])
+            if rate > 0:
+                _usd_egp_cache = {'rate': rate, 'time': now_t}
+                log.info(f"✅ USD/EGP from TwelveData: {rate}")
+                return rate
+    except Exception as e:
+        log.warning(f"TwelveData USD/EGP failed: {e}")
+
+    # ── المصادر الاحتياطية ──
     sources = [
-        ("https://api.exchangerate-api.com/v4/latest/USD",   'rates'),
-        ("https://open.er-api.com/v6/latest/USD",             'conversion_rates'),
-        ("https://api.fxratesapi.com/latest?base=USD",        'rates'),
+        ("https://api.exchangerate-api.com/v4/latest/USD",  'rates'),
+        ("https://open.er-api.com/v6/latest/USD",            'conversion_rates'),
+        ("https://api.fxratesapi.com/latest?base=USD",       'rates'),
     ]
     for url, key in sources:
         try:
-            r    = requests.get(url, timeout=10)
+            r    = requests.get(url, timeout=8)
             data = r.json()
             if key in data and 'EGP' in data[key]:
                 rate = float(data[key]['EGP'])
                 if rate > 0:
                     _usd_egp_cache = {'rate': rate, 'time': now_t}
-                    log.info(f"✅ USD/EGP updated: {rate} from {url}")
+                    log.info(f"✅ USD/EGP from {url}: {rate}")
                     return rate
         except Exception as e:
-            log.warning(f"USD/EGP source failed {url}: {e}")
-            continue
+            log.warning(f"USD/EGP failed {url}: {e}")
 
-    # لو كل المصادر فشلت رجّع آخر قيمة محفوظة
     if _usd_egp_cache['rate']:
-        log.warning("USD/EGP using cached rate")
         return _usd_egp_cache['rate']
-
-    # قيمة افتراضية لو مفيش أي بيانات
-    log.warning("USD/EGP using fallback rate 50.0")
-    return 50.0
+    return None
 
 def calc_egypt_gold(gold_usd: float, usd_egp: float) -> dict:
     """
@@ -391,14 +399,18 @@ def fmt_egypt_gold_msg(gold_usd: float) -> str:
     """رسالة أسعار الذهب المصري"""
     usd_egp = get_usd_egp()
     if not usd_egp:
-        return "❌ فشل جلب سعر الدولار. جرب مرة أخرى."
+        return (
+            "❌ فشل جلب سعر الدولار من كل المصادر.\n"
+            "تحقق من لوج Render للمزيد."
+        )
 
     eg = calc_egypt_gold(gold_usd, usd_egp)
+    cached = "♻️ محفوظ" if _usd_egp_cache['time'] > 0 and time.time() - _usd_egp_cache['time'] > 10 else "🔴 مباشر"
 
     lines = [
-        "╔══ 🇪🇬 أسعار الذهب في مصر ══╗",
+        "🇪🇬 *أسعار الذهب في مصر*",
         f"",
-        f"💵 سعر الدولار: *{eg['usd_egp']:.2f} جنيه*",
+        f"💵 سعر الدولار: *{usd_egp:.2f} جنيه* {cached}",
         f"🥇 الذهب عالمياً: *${gold_usd:,.2f}*",
         f"",
         f"📊 *سعر الجرام بالجنيه:*",
@@ -408,11 +420,10 @@ def fmt_egypt_gold_msg(gold_usd: float) -> str:
         f"   🔸 عيار 18: *{eg['gram_18']:,.0f} جنيه*",
         f"   🔸 عيار 14: *{eg['gram_14']:,.0f} جنيه*",
         f"",
-        f"   🏅 الأوقية (31.1 جم): *{eg['ounce']:,.0f} جنيه*",
+        f"   🏅 الأوقية: *{eg['ounce']:,.0f} جنيه*",
         f"",
         f"⚠️ _الأسعار تقريبية — بتختلف من محل لمحل_",
         f"🕐 {now_local().strftime('%H:%M:%S')} (GMT+2)",
-        "╚══════════════════════════════╝",
     ]
     return '\n'.join(lines)
 
