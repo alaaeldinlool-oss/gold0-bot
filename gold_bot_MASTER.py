@@ -345,31 +345,39 @@ def get_egypt_gold_prices() -> Optional[dict]:
                             headers={'User-Agent': 'Mozilla/5.0'})
         text = r.text
 
-        def get_table_price(karat):
-            # يدور في الجدول: ذهب عيار X | Y جنيه مصري | Z جنيه مصري
-            pat = rf'ذهب عيار {karat}\s*\|\s*(\d[\d,]+)\s*جنيه مصري\s*\|\s*(\d[\d,]+)\s*جنيه مصري'
+        def get_karat(karat):
+            # الشكل: [بيع 7171\n7220\nعيار 21]
+            pat = rf'بيع\s+(\d[\d,]+)\s*\n\s*(\d[\d,]+)\s*\n\s*عيار {karat}'
             m   = re.search(pat, text)
             if m:
                 v1 = float(m.group(1).replace(',', ''))
                 v2 = float(m.group(2).replace(',', ''))
-                return max(v1, v2), min(v1, v2)
+                if 4000 < v1 < 15000 and 4000 < v2 < 15000:
+                    return min(v1,v2), max(v1,v2)  # sell, buy
+            # شكل بديل: رقم واحد فقط
+            pat2 = rf'(\d[\d,]+)\s*\n\s*عيار {karat}'
+            m2   = re.search(pat2, text)
+            if m2:
+                v = float(m2.group(1).replace(',', ''))
+                if 4000 < v < 15000:
+                    return v, v
             return None, None
 
-        def get_single(pattern):
-            m = re.search(pattern, text)
+        def get_rate(label):
+            pat = rf'{label}\s*\n\s*([\d.]+)\s*جنيه'
+            m   = re.search(pat, text)
             if m:
-                return float(m.group(1).replace(',', ''))
+                v = float(m.group(1))
+                if v > 10:
+                    return v
             return None
 
-        g24_buy, g24_sell   = get_table_price(24)
-        g21_buy, g21_sell   = get_table_price(21)
-        g18_buy, _          = get_table_price(18)
+        g21_sell, g21_buy = get_karat(21)
+        g18_sell, g18_buy = get_karat(18)
+        g24_sell, g24_buy = get_karat(24)
+        dollar_bank  = get_rate('الدولار في البنوك')
+        dollar_sagha = get_rate('دولار الصاغة الآن')
 
-        # سعر الدولار
-        dollar_bank  = get_single(r'الدولار في البنوك\s*\n\s*([\d.]+)\s*جنيه مصري')
-        dollar_sagha = get_single(r'دولار الصاغة الآن\s*\n\s*([\d.]+)\s*جنيه مصري')
-
-        # تحقق من صحة البيانات
         if g21_buy and 4000 < g21_buy < 15000:
             data = {
                 'gram_21_buy':  g21_buy,
@@ -383,7 +391,7 @@ def get_egypt_gold_prices() -> Optional[dict]:
             log.info(f"✅ Egypt gold: 21k={g21_buy}, USD={dollar_bank}")
             return data
         else:
-            log.warning(f"Egypt gold: invalid 21k={g21_buy}")
+            log.warning(f"Egypt gold: invalid data g21={g21_buy}")
     except Exception as e:
         log.warning(f"Egypt gold scrape failed: {e}")
     return None
