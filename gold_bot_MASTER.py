@@ -127,13 +127,13 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1Ow
 TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e")
 
 # Groq API Key (مجاني — من console.groq.com)
-GROQ_KEY        = os.getenv("GROQ_KEY",        "")
+GROQ_KEY        = os.getenv("GROQ_KEY",        "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")
 
 # MongoDB URI (لحفظ الإشارات والإحصائيات)
-MONGODB_URI     = os.getenv("MONGODB_URI",     "")
+MONGODB_URI     = os.getenv("MONGODB_URI",     "mongodb+srv://alaaeldinlool_db_user:97sJMDccaJjmszje@cluster0.oufdfub.mongodb.net/?appName=Cluster0")
 
 # Chat IDs for daily reports (أضف الـ chat IDs اللي تحب ترسلها)
-REPORT_CHAT_IDS = []  # مثال: [123456789, -987654321]
+REPORT_CHAT_IDS = [6141014695]  #
 
 # ════════════════════════════════════════════════════════════════
 #  LOGGING
