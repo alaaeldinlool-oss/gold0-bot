@@ -40,6 +40,50 @@ import os
 import logging
 import asyncio
 import time
+
+# ================= USD/EGP ENGINE =================
+_usd_egp_cache = {
+    'rate': None,
+    'time': 0
+}
+
+def get_usd_egp():
+    global _usd_egp_cache
+    now = time.time()
+
+    if _usd_egp_cache['rate'] and now - _usd_egp_cache['time'] < 60:
+        return _usd_egp_cache['rate']
+
+    sources = [
+        "https://api.exchangerate-api.com/v4/latest/USD",
+        "https://open.er-api.com/v6/latest/USD",
+        "https://api.fxratesapi.com/latest?base=USD&symbols=EGP"
+    ]
+
+    for url in sources:
+        try:
+            r = requests.get(url, timeout=4)
+            data = r.json()
+
+            rate = None
+            if "rates" in data:
+                rate = data["rates"].get("EGP")
+            elif "data" in data:
+                rate = data["data"].get("EGP")
+
+            if rate:
+                rate = float(rate)
+                if 30 < rate < 100:
+                    _usd_egp_cache['rate'] = rate
+                    _usd_egp_cache['time'] = now
+                    return rate
+
+        except Exception as e:
+            print("USD SOURCE FAIL:", url, e)
+
+    return _usd_egp_cache.get('rate', 50.0)
+# ==================================================
+
 import threading
 from datetime import datetime, timedelta, timezone
 
@@ -134,6 +178,7 @@ MONGODB_URI     = os.getenv("MONGODB_URI",     "mongodb+srv://alaaeldinlool_db_u
 
 # Chat IDs for daily reports (أضف الـ chat IDs اللي تحب ترسلها)
 REPORT_CHAT_IDS = [6141014695]  #
+
 
 # ════════════════════════════════════════════════════════════════
 #  LOGGING
@@ -3140,9 +3185,97 @@ def main():
         # تتبع اليومي كل 5 دقائق
         jq.run_repeating(track_daily, interval=300, first=60)
         # تقرير أسبوعي كل جمعة 21:00 UTC
-        from datetime import time as dtime
+        from datetime import time
+
+# ================= USD/EGP ENGINE =================
+_usd_egp_cache = {
+    'rate': None,
+    'time': 0
+}
+
+def get_usd_egp():
+    global _usd_egp_cache
+    now = time.time()
+
+    if _usd_egp_cache['rate'] and now - _usd_egp_cache['time'] < 60:
+        return _usd_egp_cache['rate']
+
+    sources = [
+        "https://api.exchangerate-api.com/v4/latest/USD",
+        "https://open.er-api.com/v6/latest/USD",
+        "https://api.fxratesapi.com/latest?base=USD&symbols=EGP"
+    ]
+
+    for url in sources:
+        try:
+            r = requests.get(url, timeout=4)
+            data = r.json()
+
+            rate = None
+            if "rates" in data:
+                rate = data["rates"].get("EGP")
+            elif "data" in data:
+                rate = data["data"].get("EGP")
+
+            if rate:
+                rate = float(rate)
+                if 30 < rate < 100:
+                    _usd_egp_cache['rate'] = rate
+                    _usd_egp_cache['time'] = now
+                    return rate
+
+        except Exception as e:
+            print("USD SOURCE FAIL:", url, e)
+
+    return _usd_egp_cache.get('rate', 50.0)
+# ==================================================
+ as dtime
         jq.run_daily(send_weekly_report, time=dtime(21, 0), days=(4,))  # 4 = جمعة
-        from datetime import time as dtime
+        from datetime import time
+
+# ================= USD/EGP ENGINE =================
+_usd_egp_cache = {
+    'rate': None,
+    'time': 0
+}
+
+def get_usd_egp():
+    global _usd_egp_cache
+    now = time.time()
+
+    if _usd_egp_cache['rate'] and now - _usd_egp_cache['time'] < 60:
+        return _usd_egp_cache['rate']
+
+    sources = [
+        "https://api.exchangerate-api.com/v4/latest/USD",
+        "https://open.er-api.com/v6/latest/USD",
+        "https://api.fxratesapi.com/latest?base=USD&symbols=EGP"
+    ]
+
+    for url in sources:
+        try:
+            r = requests.get(url, timeout=4)
+            data = r.json()
+
+            rate = None
+            if "rates" in data:
+                rate = data["rates"].get("EGP")
+            elif "data" in data:
+                rate = data["data"].get("EGP")
+
+            if rate:
+                rate = float(rate)
+                if 30 < rate < 100:
+                    _usd_egp_cache['rate'] = rate
+                    _usd_egp_cache['time'] = now
+                    return rate
+
+        except Exception as e:
+            print("USD SOURCE FAIL:", url, e)
+
+    return _usd_egp_cache.get('rate', 50.0)
+# ==================================================
+ as dtime
         jq.run_daily(send_daily_report, time=dtime(7, 0))
         jq.run_daily(send_daily_report, time=dtime(20, 0))
 
