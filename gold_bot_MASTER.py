@@ -433,12 +433,15 @@ def get_egypt_gold_prices() -> Optional[dict]:
         # احسب الأسعار المحلية
         eg = calc_egypt_gold(gold_usd, usd_egp)
 
-        # هامش السوق المحلي المصري (عادة +2% على السعر العالمي)
+        # هامش السوق المحلي المصري (+2%)
         margin = 1.02
         g21 = round(eg['gram_21'] * margin)
         g24 = round(eg['gram_24'] * margin)
         g18 = round(eg['gram_18'] * margin)
         g14 = round(eg['gram_14'] * margin)
+
+        # دولار الصاغة = دولار البنك - 0.5 إلى 1 جنيه (فرق السوق المصري)
+        usd_sagha = round(usd_egp - 0.55, 2)
 
         data = {
             'gram_21_buy':  g21,
@@ -447,7 +450,7 @@ def get_egypt_gold_prices() -> Optional[dict]:
             'gram_18':      g18,
             'gram_14':      g14,
             'dollar_bank':  usd_egp,
-            'dollar_sagha': usd_egp,
+            'dollar_sagha': usd_sagha,
             'gold_usd':     gold_usd,
         }
         _egypt_gold_cache = {'data': data, 'time': now_t}
@@ -764,8 +767,100 @@ def calc_fibonacci(H: float, L: float) -> dict:
     }
 
 # ════════════════════════════════════════════════════════════════
-#  SMART MONEY CONCEPTS
+#  GANN ANALYSIS
 # ════════════════════════════════════════════════════════════════
+
+def calc_gann_square(price: float) -> dict:
+    """
+    Gann Square of Nine — يحسب مستويات الدعم والمقاومة
+    حول السعر الحالي على مربع التسعة
+    """
+    import math
+    # حساب الجذر التربيعي للسعر
+    root = math.sqrt(price)
+    
+    # مستويات Gann (زيادة/نقص 0.25 على الجذر = ربع دورة)
+    levels = {}
+    angles = [0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
+    labels = ['0°', '90°', '180°', '270°', '360°', '540°', '720°']
+    
+    resistance = []
+    support    = []
+    
+    for i, (ang, lbl) in enumerate(zip(angles, labels)):
+        r_level = round((root + ang) ** 2, 3)
+        s_level = round((root - ang) ** 2, 3)
+        if r_level > price:
+            resistance.append({'level': r_level, 'angle': lbl})
+        if s_level > 0 and s_level < price:
+            support.append({'level': s_level, 'angle': lbl})
+    
+    # Cardinal Cross levels (90° intervals)
+    cardinals = []
+    for i in range(1, 9):
+        c = round((root + i * 0.25) ** 2, 3)
+        cardinals.append(c)
+    
+    return {
+        'price':      price,
+        'root':       round(root, 4),
+        'resistance': resistance[:5],
+        'support':    sorted(support, reverse=True)[:5],
+        'cardinals':  cardinals[:8],
+    }
+
+
+def calc_gann_fan(H: float, L: float, price: float) -> dict:
+    """
+    Gann Fan — خطوط الزوايا من قمة أو قاع
+    الزوايا: 1x8, 1x4, 1x3, 1x2, 1x1, 2x1, 3x1, 4x1, 8x1
+    """
+    rng   = H - L
+    # نسب زوايا Gann
+    ratios = {
+        '1x8 (82.5°)': 1/8,
+        '1x4 (75°)':   1/4,
+        '1x3 (71.25°)':1/3,
+        '1x2 (63.75°)':1/2,
+        '1x1 (45°) ⭐': 1.0,
+        '2x1 (26.25°)':2.0,
+        '3x1 (18.75°)':3.0,
+        '4x1 (15°)':   4.0,
+        '8x1 (7.5°)':  8.0,
+    }
+    
+    # حساب المستويات من القاع (صاعد) والقمة (هابط)
+    fan_from_low  = {}
+    fan_from_high = {}
+    
+    for label, ratio in ratios.items():
+        fan_from_low[label]  = round(L + rng * ratio, 3)
+        fan_from_high[label] = round(H - rng * ratio, 3)
+    
+    # تحديد الزاوية الحالية
+    current_ratio = (price - L) / rng if rng > 0 else 0
+    if current_ratio >= 0.875:
+        current_angle = "1x8 (82.5°) - قوي جداً"
+    elif current_ratio >= 0.75:
+        current_angle = "1x4 (75°) - قوي"
+    elif current_ratio >= 0.5:
+        current_angle = "1x1 (45°) - متوازن"
+    elif current_ratio >= 0.25:
+        current_angle = "2x1 (26.25°) - ضعيف"
+    else:
+        current_angle = "4x1 (15°) - ضعيف جداً"
+    
+    return {
+        'H': H, 'L': L,
+        'price': price,
+        'fan_from_low':  fan_from_low,
+        'fan_from_high': fan_from_high,
+        'current_angle': current_angle,
+        'current_ratio': round(current_ratio * 100, 1),
+    }
+
+
+
 
 def detect_order_blocks(d: dict, lookback: int = 30) -> list:
     obs = []
@@ -1254,8 +1349,6 @@ async def notify_session_start(context):
 
 async def track_sessions(context):
     """يتتبع فتح وإغلاق كل سيشن ويبعت تقرير"""
-    if not alert_subscribers:
-        return
     try:
         price = get_price_cached()
         if not price:
@@ -1283,8 +1376,8 @@ async def track_sessions(context):
                 s['start_time'] = now_local().strftime('%H:%M')
 
                 text = (
-                    f"{cfg['icon']} *{cfg['name']} - فتح السيشن*\n\n"
-                    f"🟢 سعر الفتح: *{fmt_price(price)}*\n"
+                    f"{cfg['icon']} {cfg['name']} - فتح السيشن\n\n"
+                    f"🟢 سعر الفتح: {fmt_price(price)}\n"
                     f"🕐 {now_local().strftime('%H:%M')} (GMT+2)\n\n"
                     f"⏳ السيشن بدأ - سيتم إرسال تقرير الإغلاق بعد انتهائه"
                 )
@@ -1319,13 +1412,13 @@ async def track_sessions(context):
                 sign        = '+' if chg >= 0 else ''
 
                 text = (
-                    f"{cfg['icon']} *{cfg['name']} - تقرير الإغلاق*\n\n"
-                    f"🟢 سعر الفتح:   *{fmt_price(open_price)}*\n"
-                    f"🔴 سعر الإغلاق: *{fmt_price(close_price)}*\n\n"
-                    f"{chg_icon} التغيير: *{sign}{chg:.2f}$ ({sign}{chg_pct:.2f}%)*\n\n"
-                    f"📊 أعلى سعر: `{fmt_price(high_price)}`\n"
-                    f"📊 أدنى سعر: `{fmt_price(low_price)}`\n"
-                    f"📏 النطاق:   `{rng:.2f}$`\n\n"
+                    f"{cfg['icon']} {cfg['name']} - تقرير الإغلاق\n\n"
+                    f"🟢 سعر الفتح:   {fmt_price(open_price)}\n"
+                    f"🔴 سعر الإغلاق: {fmt_price(close_price)}\n\n"
+                    f"{chg_icon} التغيير: {sign}{chg:.2f}$ ({sign}{chg_pct:.2f}%)\n\n"
+                    f"📊 أعلى سعر: {fmt_price(high_price)}\n"
+                    f"📊 أدنى سعر: {fmt_price(low_price)}\n"
+                    f"📏 النطاق:   {rng:.2f}$\n\n"
                     f"{'🟢 سيشن صاعد' if chg >= 0 else '🔴 سيشن هابط'}\n"
                     f"🕐 {now_local().strftime('%H:%M')} (GMT+2)"
                 )
@@ -2218,6 +2311,10 @@ def main_keyboard():
             InlineKeyboardButton("⚡ SMC",           callback_data="smc"),
         ],
         [
+            InlineKeyboardButton("⬜ Gann Square",  callback_data="gann_square"),
+            InlineKeyboardButton("📐 Gann Fan",     callback_data="gann_fan"),
+        ],
+        [
             InlineKeyboardButton("🔔 تنبيهات ON/OFF", callback_data="alert"),
             InlineKeyboardButton("📋 قائمة التنبيهات",callback_data="alerts"),
         ],
@@ -2405,11 +2502,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f500 = H - rng*0.500
             f618 = H - rng*0.618
             text = (f"📌 PIVOT POINTS\n\n"
-                    f"R3: `{R3:.3f}`\nR2: `{R2:.3f}`\nR1: `{R1:.3f}`\n"
-                    f"PP: `{PP:.3f}` ←\n"
-                    f"S1: `{S1:.3f}`\nS2: `{S2:.3f}`\nS3: `{S3:.3f}`\n\n"
+                    f"R3: {R3:.3f}\nR2: {R2:.3f}\nR1: {R1:.3f}\n"
+                    f"PP: {PP:.3f} ←\n"
+                    f"S1: {S1:.3f}\nS2: {S2:.3f}\nS3: {S3:.3f}\n\n"
                     f"📐 Fibonacci\n"
-                    f"38.2%: `{f382:.3f}`\n50%: `{f500:.3f}`\n61.8%: `{f618:.3f}`")
+                    f"38.2%: {f382:.3f}\n50%: {f500:.3f}\n61.8%: {f618:.3f}")
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
@@ -2427,18 +2524,84 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Find where current price sits
             retrace = ((H - C) / rng * 100) if rng > 0 else 0
             text = (f"📐 FIBONACCI RETRACEMENT\n"
-                    f"High: `{H:.3f}` · Low: `{L:.3f}`\n"
-                    f"الآن: `{C:.3f}` ({retrace:.1f}% retrace)\n\n"
-                    f"0%:    `{H:.3f}`\n"
-                    f"23.6%: `{H-rng*.236:.3f}`\n"
-                    f"38.2%: `{H-rng*.382:.3f}` 🔑\n"
-                    f"50%:   `{H-rng*.5:.3f}` 🔑\n"
-                    f"61.8%: `{H-rng*.618:.3f}` 🥇 Golden\n"
-                    f"78.6%: `{H-rng*.786:.3f}`\n"
-                    f"100%:  `{L:.3f}`\n\n"
+                    f"High: {H:.3f} · Low: {L:.3f}\n"
+                    f"الآن: {C:.3f} ({retrace:.1f}% retrace)\n\n"
+                    f"0%:    {H:.3f}\n"
+                    f"23.6%: {H-rng*.236:.3f}\n"
+                    f"38.2%: {H-rng*.382:.3f} 🔑\n"
+                    f"50%:   {H-rng*.5:.3f} 🔑\n"
+                    f"61.8%: {H-rng*.618:.3f} 🥇 Golden\n"
+                    f"78.6%: {H-rng*.786:.3f}\n"
+                    f"100%:  {L:.3f}\n\n"
                     f"📈 Extensions:\n"
-                    f"127.2%: `{L-rng*.272:.3f}`\n"
-                    f"161.8%: `{L-rng*.618:.3f}`")
+                    f"127.2%: {L-rng*.272:.3f}\n"
+                    f"161.8%: {L-rng*.618:.3f}")
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                       reply_markup=main_keyboard())
+
+    elif data == "gann_square":
+        await query.message.reply_text("⏳ جاري حساب Gann Square...",
+                                       reply_markup=main_keyboard())
+        price = get_price_cached()
+        if not price:
+            text = "❌ فشل جلب السعر."
+        else:
+            g = calc_gann_square(price)
+            lines = [
+                f"⬜ GANN SQUARE OF NINE",
+                f"السعر: {price:.3f}  |  الجذر: {g['root']}",
+                "",
+                "📈 مستويات المقاومة:",
+            ]
+            for r in g['resistance']:
+                lines.append(f"  ▲ {r['level']:.3f}  ({r['angle']})")
+            lines.append("")
+            lines.append("📉 مستويات الدعم:")
+            for s in g['support']:
+                lines.append(f"  ▼ {s['level']:.3f}  ({s['angle']})")
+            lines += [
+                "",
+                "🔄 Cardinal Cross (كل 90°):",
+            ]
+            for i, c in enumerate(g['cardinals']):
+                arrow = "▲" if c > price else "▼"
+                lines.append(f"  {arrow} {c:.3f}")
+            text = '\n'.join(lines)
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                       reply_markup=main_keyboard())
+
+    elif data == "gann_fan":
+        await query.message.reply_text("⏳ جاري حساب Gann Fan...",
+                                       reply_markup=main_keyboard())
+        d = fetch_ohlcv("1day", 90)
+        if not d or not d.get("high"):
+            text = "❌ فشل جلب البيانات."
+        else:
+            H     = max(d["high"])
+            L     = min(d["low"])
+            price = d["close"][-1]
+            g     = calc_gann_fan(H, L, price)
+            lines = [
+                f"📐 GANN FAN",
+                f"High: {H:.3f}  |  Low: {L:.3f}",
+                f"السعر: {price:.3f}  ({g['current_ratio']}% من القاع)",
+                f"الزاوية الحالية: {g['current_angle']}",
+                "",
+                "📈 Fan من القاع (صاعد):",
+            ]
+            for label, level in g['fan_from_low'].items():
+                arrow = "← أنت هنا" if abs(level - price) < (H-L)*0.03 else ""
+                marker = "▲" if level > price else "▼"
+                lines.append(f"  {marker} {label}: {level:.3f} {arrow}")
+            lines += [
+                "",
+                "📉 Fan من القمة (هابط):",
+            ]
+            for label, level in g['fan_from_high'].items():
+                arrow = "← أنت هنا" if abs(level - price) < (H-L)*0.03 else ""
+                marker = "▲" if level > price else "▼"
+                lines.append(f"  {marker} {label}: {level:.3f} {arrow}")
+            text = '\n'.join(lines)
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
