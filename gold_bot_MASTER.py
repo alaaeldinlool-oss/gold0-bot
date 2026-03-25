@@ -116,10 +116,10 @@ if not hasattr(_BotClass, '_patched_safe'):
     _BotClass._patched_safe = True
 
 
-
 # ════════════════════════════════════════════════════════════════
 #  ⚠️  CONFIG — ضع بياناتك هنا أو في environment variables
 # ════════════════════════════════════════════════════════════════
+
 # Telegram Bot Token — احصل عليه من @BotFather
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1OwbztbIZ5KzNo0")
 
@@ -127,13 +127,13 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1Ow
 TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e")
 
 # Groq API Key (مجاني — من console.groq.com)
-GROQ_KEY        = os.getenv("GROQ_KEY",        "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")
+GROQ_KEY        = os.getenv("GROQ_KEY",        "")
 
 # MongoDB URI (لحفظ الإشارات والإحصائيات)
-MONGODB_URI     = os.getenv("MONGODB_URI",     "mongodb+srv://alaaeldinlool_db_user:97sJMDccaJjmszje@cluster0.oufdfub.mongodb.net/?appName=Cluster0")
+MONGODB_URI     = os.getenv("MONGODB_URI",     "")
 
 # Chat IDs for daily reports (أضف الـ chat IDs اللي تحب ترسلها)
-REPORT_CHAT_IDS = [6141014695]  #
+REPORT_CHAT_IDS = []  # مثال: [123456789, -987654321]
 
 # ════════════════════════════════════════════════════════════════
 #  LOGGING
@@ -362,7 +362,6 @@ def get_price() -> Optional[float]:
         return d['close'][-1] if d else None
 
 _egypt_gold_cache = {'data': None, 'time': 0}
-_usd_egp_cache = {'rate': None, 'time': 0}
 
 def ar_to_en(s: str) -> str:
     for i, d in enumerate('٠١٢٣٤٥٦٧٨٩'):
@@ -477,66 +476,65 @@ def calc_egypt_gold(gold_usd: float, usd_egp: float) -> dict:
         'ounce':   gold_usd * usd_egp,
     }
 
-
 def fmt_egypt_gold_msg(gold_usd: float) -> str:
+    """رسالة أسعار الذهب المصري — من السوق المحلي مباشرة"""
     local = get_egypt_gold_prices()
 
     if local and local.get('gram_21_buy'):
-        usd_egp  = local.get('dollar_bank') or 52.0
+        usd_egp  = local.get('dollar_bank') or local.get('dollar_sagha') or get_usd_egp() or 52.0
         g21_buy  = local['gram_21_buy']
         g21_sell = local.get('gram_21_sell') or g21_buy
-        g18      = local.get('gram_18')
-        g24      = local.get('gram_24')
-        g14      = local.get('gram_14')
+        g18      = local.get('gram_18') or g21_buy * 0.857
+        g24      = local.get('gram_24') or g21_buy * 1.143
+        g14      = round(g21_buy * 0.667)
         ounce    = round(g24 * 31.1035)
+        d_sagha  = local.get('dollar_sagha')
 
-        return f"""
-<b>🇪🇬 أسعار الذهب في مصر</b>
-━━━━━━━━━━━━━━━━━━
-
-💵 الدولار: <b>{usd_egp:.2f} جنيه</b>
-🥇 الذهب عالمي: <b>${gold_usd:,.2f}</b>
-
-━━━━━━━━━━━━━━━━━━
-<b>📊 سعر الجرام</b>
-
-🔸 عيار 24: <b>{g24:,.0f} جنيه</b>
-🔸 عيار 21 بيع: <b>{g21_buy:,.0f} جنيه</b>
-🔸 عيار 21 شراء: <b>{g21_sell:,.0f} جنيه</b>
-🔸 عيار 18: <b>{g18:,.0f} جنيه</b>
-🔸 عيار 14: <b>{g14:,.0f} جنيه</b>
-
-━━━━━━━━━━━━━━━━━━
-🏅 الأوقية: <b>{ounce:,.0f} جنيه</b>
-
-🕐 {now_local().strftime('%H:%M:%S')} GMT+2
-"""
-
-
-
-_price_cache = {'value': None, 'time': 0}
-
-def get_price_cached():
-    now = time.time()
-    if _price_cache['value'] and now - _price_cache['time'] < 5:
-        return _price_cache['value']
-    price = get_price()
-    if price:
-        _price_cache['value'] = price
-        _price_cache['time'] = now
-    return price
-
-_ohlcv_cache = {}
-
-def fetch_ohlcv_cached(interval, size):
-    key = f"{interval}_{size}"
-    now = time.time()
-    if key in _ohlcv_cache and now - _ohlcv_cache[key]['time'] < 30:
-        return _ohlcv_cache[key]['data']
-    data = fetch_ohlcv(interval, size)
-    if data:
-        _ohlcv_cache[key] = {'data': data, 'time': now}
-    return data
+        lines = [
+            "🇪🇬 أسعار الذهب في مصر",
+            "🔴 مباشر من السوق",
+            "",
+            f"💵 الدولار البنوك: *{usd_egp:.2f} جنيه*",
+        ]
+        if d_sagha:
+            lines.append(f"💱 دولار الصاغة: *{d_sagha:.2f} جنيه*")
+        lines += [
+            f"🥇 الذهب عالمياً: *${gold_usd:,.2f}*",
+            "",
+            "📊 *سعر الجرام:*",
+            "",
+            f"🔸 عيار 24:  *{g24:,.0f} جنيه*",
+            f"🔸 عيار 21 بيع: *{g21_buy:,.0f} جنيه*",
+            f"🔸 عيار 21 شراء: *{g21_sell:,.0f} جنيه*",
+            f"🔸 عيار 18: *{g18:,.0f} جنيه*",
+            f"🔸 عيار 14: *{g14:,.0f} جنيه*",
+            "",
+            f"🏅 الأوقية: *{ounce:,.0f} جنيه*",
+            "",
+            "📡 محسوب من TwelveData (XAU/USD + USD/EGP)",
+            f"🕐 {now_local().strftime('%H:%M:%S')} GMT+2",
+        ]
+    else:
+        usd_egp = get_usd_egp() or 52.0
+        eg = calc_egypt_gold(gold_usd, usd_egp)
+        lines = [
+            "🇪🇬 أسعار الذهب في مصر",
+            "⚠️ تقريبي",
+            "",
+            f"💵 الدولار: *{usd_egp:.2f} جنيه*",
+            f"🥇 الذهب عالمياً: *${gold_usd:,.2f}*",
+            "",
+            "📊 *سعر الجرام تقريبي:*",
+            "",
+            f"🔸 عيار 24: *{eg['gram_24']:,.0f} جنيه*",
+            f"🔸 عيار 21: *{eg['gram_21']:,.0f} جنيه*",
+            f"🔸 عيار 18: *{eg['gram_18']:,.0f} جنيه*",
+            f"🔸 عيار 14: *{eg['gram_14']:,.0f} جنيه*",
+            "",
+            "⚠️ فشل جلب السعر المحلي",
+            f"🕐 {now_local().strftime('%H:%M:%S')} GMT+2",
+        ]
+    return '\n'.join(lines)
 
 # ════════════════════════════════════════════════════════════════
 #  INDICATORS — Correct implementations
