@@ -810,7 +810,17 @@ def main_keyboard():
         ],
         [
             InlineKeyboardButton("🤖 AI تحليل",    callback_data="ai"),
+            InlineKeyboardButton("📊 شارت",         callback_data="chart"),
             InlineKeyboardButton("❓ مساعدة",       callback_data="help"),
+        ],
+        [
+            InlineKeyboardButton("🏆 إحصائياتي",   callback_data="stats"),
+            InlineKeyboardButton("🕐 السيشن",       callback_data="session"),
+            InlineKeyboardButton("📋 تاريخ السيشن", callback_data="session_history"),
+        ],
+        [
+            InlineKeyboardButton("🇪🇬 ذهب مصر",    callback_data="egypt"),
+            InlineKeyboardButton("📅 تقرير أسبوعي", callback_data="weekly"),
         ],
     ])
 
