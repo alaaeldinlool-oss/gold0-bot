@@ -1423,88 +1423,88 @@ async def track_daily(context):
 
 
 def get_weekly_report(weeks_back: int = 0) -> Optional[dict]:
-    """جيب بيانات أسبوع معين — MongoDB أولاً، TwelveData كـ fallback"""
-    db = get_db()
+    """جيب بيانات أسبوع معين - الاثنين للجمعة بس"""
+    from datetime import date as ddate
+    db  = get_db()
+    now = now_local()
 
-    now               = now_local()
+    # الاثنين للجمعة فقط
     days_since_monday = now.weekday()
-    week_start        = now - timedelta(days=days_since_monday + weeks_back * 7)
-    week_end          = week_start + timedelta(days=6)
+    week_start = now - timedelta(days=days_since_monday + weeks_back * 7)
+    week_end   = week_start + timedelta(days=4)  # الجمعة فقط
     ws = week_start.strftime('%Y-%m-%d')
     we = week_end.strftime('%Y-%m-%d')
 
     days = []
 
-    # ── جرب MongoDB أولاً ──
+    # MongoDB
     if db is not None:
         try:
             days = list(db.daily.find({
-                'date': {'$gte': ws, '$lte': we}
+                'date':    {'$gte': ws, '$lte': we},
+                'weekday': {'$lte': 4}
             }).sort('date', 1))
         except Exception as e:
             log.warning(f"MongoDB weekly fetch error: {e}")
 
-    # ── Fallback: TwelveData اليومي ──
+    # TwelveData fallback
     if not days:
         try:
-            d = fetch_ohlcv('1day', 14)
+            d = fetch_ohlcv('1day', 10)
             if d and d.get('close'):
-                closes = d['close']
-                opens  = d['open']
-                highs  = d['high']
-                lows   = d['low']
-                times  = d['time']
-                for i in range(len(closes)):
-                    date_str = times[i][:10]
+                for i in range(len(d['close'])):
+                    date_str = d['time'][i][:10]
                     if ws <= date_str <= we:
-                        chg     = closes[i] - opens[i]
-                        chg_pct = (chg / opens[i] * 100) if opens[i] else 0
-                        from datetime import date as ddate
-                        d_obj    = ddate.fromisoformat(date_str)
+                        d_obj = ddate.fromisoformat(date_str)
+                        if d_obj.weekday() > 4:
+                            continue
+                        chg      = d['close'][i] - d['open'][i]
+                        chg_pct  = (chg / d['open'][i] * 100) if d['open'][i] else 0
                         day_name = DAYS_AR.get(d_obj.weekday(), date_str)
                         days.append({
                             'date':       date_str,
                             'day_name':   day_name,
                             'weekday':    d_obj.weekday(),
-                            'open':       round(opens[i], 3),
-                            'close':      round(closes[i], 3),
-                            'high':       round(highs[i], 3),
-                            'low':        round(lows[i], 3),
+                            'open':       round(d['open'][i],  3),
+                            'close':      round(d['close'][i], 3),
+                            'high':       round(d['high'][i],  3),
+                            'low':        round(d['low'][i],   3),
                             'change':     round(chg, 3),
                             'change_pct': round(chg_pct, 3),
                             'bullish':    chg >= 0,
-                            'range':      round(highs[i] - lows[i], 3),
+                            'range':      round(d['high'][i] - d['low'][i], 3),
                         })
         except Exception as e:
             log.error(f"TwelveData weekly fallback error: {e}")
 
-    # ── أضيف اليوم الحالي من بيانات الـ 1H لو مش موجود ──
-    today_str = now_local().strftime('%Y-%m-%d')
-    if ws <= today_str <= we and not any(d['date'] == today_str for d in days):
+    # اليوم الحالي
+    today_str  = now.strftime('%Y-%m-%d')
+    today_obj  = ddate.fromisoformat(today_str)
+    is_weekday = today_obj.weekday() <= 4
+    already_in = any(x['date'] == today_str for x in days)
+
+    if ws <= today_str <= we and is_weekday and not already_in:
         try:
             d_today = fetch_ohlcv('1h', 24)
             if d_today and d_today.get('close'):
-                open_today  = d_today['open'][0]
-                close_today = d_today['close'][-1]
-                high_today  = max(d_today['high'])
-                low_today   = min(d_today['low'])
-                chg         = close_today - open_today
-                chg_pct     = (chg / open_today * 100) if open_today else 0
-                from datetime import date as ddate
-                d_obj       = ddate.fromisoformat(today_str)
-                day_name    = DAYS_AR.get(d_obj.weekday(), today_str)
+                open_t  = d_today['open'][0]
+                close_t = d_today['close'][-1]
+                high_t  = max(d_today['high'])
+                low_t   = min(d_today['low'])
+                chg     = close_t - open_t
+                chg_pct = (chg / open_t * 100) if open_t else 0
                 days.append({
                     'date':       today_str,
-                    'day_name':   day_name + ' (جاري)',
-                    'weekday':    d_obj.weekday(),
-                    'open':       round(open_today,  3),
-                    'close':      round(close_today, 3),
-                    'high':       round(high_today,  3),
-                    'low':        round(low_today,   3),
+                    'day_name':   DAYS_AR.get(today_obj.weekday(), today_str) + ' (جاري)',
+                    'weekday':    today_obj.weekday(),
+                    'open':       round(open_t,  3),
+                    'close':      round(close_t, 3),
+                    'high':       round(high_t,  3),
+                    'low':        round(low_t,   3),
                     'change':     round(chg, 3),
                     'change_pct': round(chg_pct, 3),
                     'bullish':    chg >= 0,
-                    'range':      round(high_today - low_today, 3),
+                    'range':      round(high_t - low_t, 3),
                 })
                 days.sort(key=lambda x: x['date'])
         except Exception as e:
@@ -1513,13 +1513,13 @@ def get_weekly_report(weeks_back: int = 0) -> Optional[dict]:
     if not days:
         return None
 
-    total_chg = sum(d['change'] for d in days)
-    bull_days = [d for d in days if d['bullish']]
-    bear_days = [d for d in days if not d['bullish']]
+    total_chg = sum(x['change'] for x in days)
+    bull_days = [x for x in days if x['bullish']]
+    bear_days = [x for x in days if not x['bullish']]
     best_buy  = max(days, key=lambda x: x['change'])
     best_sell = min(days, key=lambda x: x['change'])
-    week_high = max(d['high'] for d in days)
-    week_low  = min(d['low']  for d in days)
+    week_high = max(x['high'] for x in days)
+    week_low  = min(x['low']  for x in days)
 
     return {
         'days':       days,
