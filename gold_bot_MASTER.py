@@ -86,34 +86,25 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
-from telegram.helpers import escape_markdown
-# SAFE TELEGRAM PATCH
+# SAFE TELEGRAM PATCH (HTML ONLY)
 from telegram import Message
 from telegram import Bot as _BotClass
 
 async def _safe_reply_text(self, text, *args, **kwargs):
     try:
-        # تحويل * إلى bold HTML بشكل بسيط
-        text = text.replace("*", "<b>").replace("<b><b>", "</b>")
         kwargs['parse_mode'] = ParseMode.HTML
         return await _orig_reply_text(self, text, *args, **kwargs)
     except Exception:
         return await _orig_reply_text(self, text, *args, **kwargs)
 
-
 async def _safe_send_message(self, *args, **kwargs):
     try:
         if 'text' in kwargs:
-            txt = kwargs['text']
-            txt = txt.replace("*", "<b>").replace("<b><b>", "</b>")
-            kwargs['text'] = txt
             kwargs['parse_mode'] = ParseMode.HTML
         return await _orig_send_message(self, *args, **kwargs)
     except Exception:
         return await _orig_send_message(self, *args, **kwargs)
 
-
-# Apply patch مرة واحدة بس
 if not hasattr(Message, '_patched_safe'):
     _orig_reply_text = Message.reply_text
     Message.reply_text = _safe_reply_text
@@ -123,6 +114,9 @@ if not hasattr(_BotClass, '_patched_safe'):
     _orig_send_message = _BotClass.send_message
     _BotClass.send_message = _safe_send_message
     _BotClass._patched_safe = True
+
+
+
 # ════════════════════════════════════════════════════════════════
 #  ⚠️  CONFIG — ضع بياناتك هنا أو في environment variables
 # ════════════════════════════════════════════════════════════════
@@ -483,65 +477,41 @@ def calc_egypt_gold(gold_usd: float, usd_egp: float) -> dict:
         'ounce':   gold_usd * usd_egp,
     }
 
+
 def fmt_egypt_gold_msg(gold_usd: float) -> str:
-    """رسالة أسعار الذهب المصري — من السوق المحلي مباشرة"""
     local = get_egypt_gold_prices()
 
     if local and local.get('gram_21_buy'):
-        usd_egp  = local.get('dollar_bank') or local.get('dollar_sagha') or get_usd_egp() or 52.0
+        usd_egp  = local.get('dollar_bank') or 52.0
         g21_buy  = local['gram_21_buy']
         g21_sell = local.get('gram_21_sell') or g21_buy
-        g18      = local.get('gram_18') or g21_buy * 0.857
-        g24      = local.get('gram_24') or g21_buy * 1.143
-        g14      = round(g21_buy * 0.667)
+        g18      = local.get('gram_18')
+        g24      = local.get('gram_24')
+        g14      = local.get('gram_14')
         ounce    = round(g24 * 31.1035)
-        d_sagha  = local.get('dollar_sagha')
 
-        lines = [
-            "🇪🇬 أسعار الذهب في مصر",
-            "🔴 مباشر من السوق",
-            "",
-            f"💵 الدولار البنوك: *{usd_egp:.2f} جنيه*",
-        ]
-        if d_sagha:
-            lines.append(f"💱 دولار الصاغة: *{d_sagha:.2f} جنيه*")
-        lines += [
-            f"🥇 الذهب عالمياً: *${gold_usd:,.2f}*",
-            "",
-            "📊 *سعر الجرام:*",
-            "",
-            f"🔸 عيار 24:  *{g24:,.0f} جنيه*",
-            f"🔸 عيار 21 بيع: *{g21_buy:,.0f} جنيه*",
-            f"🔸 عيار 21 شراء: *{g21_sell:,.0f} جنيه*",
-            f"🔸 عيار 18: *{g18:,.0f} جنيه*",
-            f"🔸 عيار 14: *{g14:,.0f} جنيه*",
-            "",
-            f"🏅 الأوقية: *{ounce:,.0f} جنيه*",
-            "",
-            "📡 محسوب من TwelveData (XAU/USD + USD/EGP)",
-            f"🕐 {now_local().strftime('%H:%M:%S')} GMT+2",
-        ]
-    else:
-        usd_egp = get_usd_egp() or 52.0
-        eg = calc_egypt_gold(gold_usd, usd_egp)
-        lines = [
-            "🇪🇬 أسعار الذهب في مصر",
-            "⚠️ تقريبي",
-            "",
-            f"💵 الدولار: *{usd_egp:.2f} جنيه*",
-            f"🥇 الذهب عالمياً: *${gold_usd:,.2f}*",
-            "",
-            "📊 *سعر الجرام تقريبي:*",
-            "",
-            f"🔸 عيار 24: *{eg['gram_24']:,.0f} جنيه*",
-            f"🔸 عيار 21: *{eg['gram_21']:,.0f} جنيه*",
-            f"🔸 عيار 18: *{eg['gram_18']:,.0f} جنيه*",
-            f"🔸 عيار 14: *{eg['gram_14']:,.0f} جنيه*",
-            "",
-            "⚠️ فشل جلب السعر المحلي",
-            f"🕐 {now_local().strftime('%H:%M:%S')} GMT+2",
-        ]
-    return '\n'.join(lines)
+        return f"""
+<b>🇪🇬 أسعار الذهب في مصر</b>
+━━━━━━━━━━━━━━━━━━
+
+💵 الدولار: <b>{usd_egp:.2f} جنيه</b>
+🥇 الذهب عالمي: <b>${gold_usd:,.2f}</b>
+
+━━━━━━━━━━━━━━━━━━
+<b>📊 سعر الجرام</b>
+
+🔸 عيار 24: <b>{g24:,.0f} جنيه</b>
+🔸 عيار 21 بيع: <b>{g21_buy:,.0f} جنيه</b>
+🔸 عيار 21 شراء: <b>{g21_sell:,.0f} جنيه</b>
+🔸 عيار 18: <b>{g18:,.0f} جنيه</b>
+🔸 عيار 14: <b>{g14:,.0f} جنيه</b>
+
+━━━━━━━━━━━━━━━━━━
+🏅 الأوقية: <b>{ounce:,.0f} جنيه</b>
+
+🕐 {now_local().strftime('%H:%M:%S')} GMT+2
+"""
+
 
 
 _price_cache = {'value': None, 'time': 0}
@@ -1191,7 +1161,7 @@ async def cmd_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sig = full_analysis(d)
     await update.message.reply_text(
         fmt_session_msg(price, sig),
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard()
     )
 
@@ -1232,7 +1202,7 @@ async def notify_session_start(context):
             try:
                 await context.bot.send_message(
                     chat_id=chat_id, text=msg,
-                    parse_mode=ParseMode.MARKDOWN,
+                    parse_mode=ParseMode.HTML,
                     reply_markup=main_keyboard()
                 )
             except Exception as e:
@@ -1279,7 +1249,7 @@ async def track_sessions(context):
                     try:
                         await context.bot.send_message(
                             chat_id=chat_id, text=text,
-                            parse_mode=ParseMode.MARKDOWN,
+                            parse_mode=ParseMode.HTML,
                             reply_markup=main_keyboard()
                         )
                     except Exception as e:
@@ -1341,7 +1311,7 @@ async def track_sessions(context):
                     try:
                         await context.bot.send_message(
                             chat_id=chat_id, text=text,
-                            parse_mode=ParseMode.MARKDOWN,
+                            parse_mode=ParseMode.HTML,
                             reply_markup=main_keyboard()
                         )
                     except Exception as e:
@@ -1392,7 +1362,7 @@ async def cmd_session_history(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         await update.message.reply_text(
             '\n'.join(lines),
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=main_keyboard()
         )
     except Exception as e:
@@ -1688,7 +1658,7 @@ async def send_weekly_report(context):
             try:
                 await context.bot.send_message(
                     chat_id=chat_id, text=text,
-                    parse_mode=ParseMode.MARKDOWN,
+                    parse_mode=ParseMode.HTML,
                     reply_markup=main_keyboard()
                 )
             except Exception as e:
@@ -1722,7 +1692,7 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
     label = "الأسبوع السابق" if weeks_back == 1 else "هذا الأسبوع"
     await update.message.reply_text(
         fmt_weekly_msg(report, prev, label),
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard()
     )
 
@@ -2003,7 +1973,7 @@ async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      f"💰 ${sig['price']:,.3f}\n"
                      f"{'🟢 BULLISH' if sig['direction']=='BULLISH' else '🔴 BEARISH' if sig['direction']=='BEARISH' else '🟡 NEUTRAL'}\n"
                      f"BUY {sig['buyScore']}/12 · SELL {sig['sellScore']}/12"),
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=main_keyboard()
         )
     else:
@@ -2034,7 +2004,7 @@ async def check_and_send_alerts(context: ContextTypes.DEFAULT_TYPE):
                 msg = f"🔔 إشارة جديدة!\n\n" + fmt_analysis_msg(sig, '1m')
                 await context.bot.send_message(
                     chat_id=chat_id, text=msg,
-                    parse_mode=ParseMode.MARKDOWN
+                    parse_mode=ParseMode.HTML
                 )
             except Exception as e:
                 log.warning(f"Alert send error for {chat_id}: {e}")
@@ -2054,7 +2024,7 @@ async def check_and_send_alerts(context: ContextTypes.DEFAULT_TYPE):
                              f"{alert.get('label','')}\n"
                              f"السعر وصل: {fmt_price(price)}\n"
                              f"المستوى: {fmt_price(alert['price'])}",
-                        parse_mode=ParseMode.MARKDOWN
+                        parse_mode=ParseMode.HTML
                     )
                 except: pass
 
@@ -2103,7 +2073,7 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
 
     for cid in set(chat_ids):
         try:
-            await context.bot.send_message(cid, text, parse_mode=ParseMode.MARKDOWN)
+            await context.bot.send_message(cid, text, parse_mode=ParseMode.HTML)
         except Exception as e:
             log.warning(f"Report send error: {e}")
 
@@ -2244,7 +2214,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"🕐 {now_local().strftime('%H:%M:%S')} (GMT+2)")
         else:
             text = "❌ فشل جلب السعر. تحقق من API Key."
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data in ("analysis_1m", "analysis_5m"):
@@ -2258,7 +2228,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             sig = full_analysis(d)
             text = fmt_analysis_msg(sig, tf_arg)
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "trade":
@@ -2285,7 +2255,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"TP2: `{tp2:.3f}`\n"
                     f"SL:  `{sl:.3f}`\n\n"
                     f"BUY {bs}/12 · SELL {ss}/12")
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "mtf":
@@ -2301,7 +2271,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ss   = sig.get("sellScore",0)
                 icon = "🟢" if dire=="BULLISH" else "🔴" if dire=="BEARISH" else "🟡"
                 lines.append(f"{icon} *{tf_name}* - {dire} · BUY {bs} SELL {ss}")
-        await query.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "pivots":
@@ -2327,7 +2297,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"S1: `{S1:.3f}`\nS2: `{S2:.3f}`\nS3: `{S3:.3f}`\n\n"
                     f"📐 *Fibonacci*\n"
                     f"38.2%: `{f382:.3f}`\n50%: `{f500:.3f}`\n61.8%: `{f618:.3f}`")
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "fib":
@@ -2356,7 +2326,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"📈 Extensions:\n"
                     f"127.2%: `{L-rng*.272:.3f}`\n"
                     f"161.8%: `{L-rng*.618:.3f}`")
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "smc":
@@ -2381,7 +2351,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not obs and not fvgs:
                 lines.append("لا أنماط SMC واضحة حالياً")
             text = "\n".join(lines)
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "report":
@@ -2408,7 +2378,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"RSI: {rsi:.1f}\n"
                     f"ATR: {atr:.3f}\n\n"
                     f"{fmt_analysis_msg(sig,'5m')}")
-        await query.message.reply_text(text[:4000], parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text[:4000], parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "alert":
@@ -2423,7 +2393,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"الحالة: {status}\n\n"
                 f"لإضافة تنبيه عند مستوى معين:\n"
                 f"`/setalert 3100 above وصل الهدف`")
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "alerts":
@@ -2438,7 +2408,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 done = "✅" if a.get("triggered") else "⏳"
                 lines.append(f"{done} {icon} `{a['price']:.3f}` - {a.get('label','')}")
             text = "\n".join(lines)
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "ai":
@@ -2464,7 +2434,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text = await claude_analysis(sig)
             except Exception as e:
                 text = f"❌ خطأ في Groq AI: {str(e)}"
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "chart":
@@ -2483,7 +2453,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await query.message.reply_text(
             "📊 *اختر الـ Timeframe للشارت:*",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=kb
         )
 
@@ -2506,7 +2476,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                              f"💰 ${sig['price']:,.3f}\n"
                              f"{'🟢 BULLISH' if sig['direction']=='BULLISH' else '🔴 BEARISH' if sig['direction']=='BEARISH' else '🟡 NEUTRAL'}\n"
                              f"BUY {sig['buyScore']}/12 · SELL {sig['sellScore']}/12"),
-                    parse_mode=ParseMode.MARKDOWN,
+                    parse_mode=ParseMode.HTML,
                     reply_markup=main_keyboard()
                 )
             else:
@@ -2527,7 +2497,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text = fmt_weekly_msg(report, prev)
         except Exception as e:
             text = f"❌ خطأ في التقرير: {str(e)[:150]}"
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "egypt":
@@ -2558,7 +2528,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             text = f"❌ خطأ: {str(e)[:100]}"
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "session_history":
@@ -2585,7 +2555,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"   📏 نطاق: `{r['range']:.2f}$`\n"
                         )
                     text = '\n'.join(lines)
-                await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+                await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                                reply_markup=main_keyboard())
             except Exception as e:
                 await query.message.reply_text(f"❌ خطأ: {str(e)[:100]}",
@@ -2601,7 +2571,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sig = full_analysis(d)
             await query.message.reply_text(
                 fmt_session_msg(price, sig),
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
                 reply_markup=main_keyboard()
             )
 
@@ -2631,7 +2601,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⏱ *آخر 10 إشارات:*\n" +
                 '\n'.join(last10_lines)
             )
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
     elif data == "help":
@@ -2654,7 +2624,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "لشارت timeframe معين:\n"
             "`/chart 15m` أو `/chart 4h`"
         )
-        await query.message.reply_text(text, parse_mode=ParseMode.MARKDOWN,
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2669,7 +2639,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(
         text,
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard()
     )
 
@@ -2680,7 +2650,7 @@ async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🥇 *GOLD / USD*\n💰 *{fmt_price(price)}*\n"
             f"🕐 {now_local().strftime('%H:%M:%S') + ' (GMT+2)'}",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=main_keyboard()
         )
     else:
@@ -2702,7 +2672,7 @@ async def cmd_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sig = full_analysis(d)
     await update.message.reply_text(
         fmt_analysis_msg(sig, tf_arg),
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard()
     )
 
@@ -2722,7 +2692,7 @@ async def cmd_trade(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             fmt_analysis_msg(sig, '5m'),
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode=ParseMode.HTML
         )
 
 async def cmd_mtf(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2739,7 +2709,7 @@ async def cmd_mtf(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        fmt_mtf_msg(results), parse_mode=ParseMode.MARKDOWN
+        fmt_mtf_msg(results), parse_mode=ParseMode.HTML
     )
 
 async def cmd_pivots(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2753,7 +2723,7 @@ async def cmd_pivots(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fib = calc_fibonacci(max(d['high'][-60:] if len(d['high']) >= 60 else d['high']),
                          min(d['low'][-60:]  if len(d['low'])  >= 60 else d['low']))
     await update.message.reply_text(
-        fmt_pivots_msg(pv, fib, C), parse_mode=ParseMode.MARKDOWN
+        fmt_pivots_msg(pv, fib, C), parse_mode=ParseMode.HTML
     )
 
 async def cmd_fib(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2783,7 +2753,7 @@ async def cmd_fib(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"100%:  `{fib['100%']:.3f}`",
     ]
     await update.message.reply_text(
-        '\n'.join(lines), parse_mode=ParseMode.MARKDOWN,
+        '\n'.join(lines), parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard()
     )
 
@@ -2798,7 +2768,7 @@ async def cmd_smc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ms   = market_structure(d)
     await update.message.reply_text(
         fmt_smc_msg(obs, fvgs, ms, d['close'][-1]),
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode=ParseMode.HTML
     )
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2858,7 +2828,7 @@ async def cmd_alerts_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status = '✅ تم' if a['triggered'] else '⏳ منتظر'
         lines.append(f"{i}. {'↑' if a['type']=='above' else '↓'} {fmt_price(a['price'])} - {status}")
         if a.get('label'): lines.append(f"   {a['label']}")
-    await update.message.reply_text('\n'.join(lines), parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text('\n'.join(lines), parse_mode=ParseMode.HTML)
 
 async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 جاري تحليل Claude AI...")
@@ -2868,7 +2838,7 @@ async def cmd_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     sig  = full_analysis(d)
     text = await claude_analysis(sig)
-    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """إحصائيات الإشارات ودقتها"""
@@ -2884,7 +2854,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📊 *إحصائيات الإشارات*\n\n"
             "لا توجد إشارات مسجّلة بعد.\n"
             "الإشارات القوية (+9/12) بتتسجل تلقائياً.",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=main_keyboard()
         )
         return
@@ -2909,7 +2879,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '\n'.join(last10_lines)
     )
     await update.message.reply_text(
-        text, parse_mode=ParseMode.MARKDOWN,
+        text, parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard()
     )
 
@@ -2940,7 +2910,7 @@ async def cmd_egypt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         text = f"❌ خطأ: {str(e)[:100]}"
     await update.message.reply_text(
-        text, parse_mode=ParseMode.MARKDOWN,
+        text, parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard()
     )
 
@@ -2987,7 +2957,7 @@ async def auto_hourly_signal(context):
         for chat_id in list(alert_subscribers):
             await context.bot.send_message(
                 chat_id=chat_id, text=text,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
                 reply_markup=main_keyboard()
             )
     except Exception as e:
@@ -3047,7 +3017,7 @@ async def check_strong_signal(context):
             # Send with notification sound (default Telegram behavior)
             await context.bot.send_message(
                 chat_id=chat_id, text=text,
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
                 reply_markup=main_keyboard()
             )
             # احفظ الإشارة في MongoDB
@@ -3102,7 +3072,7 @@ async def check_level_break(context):
             for chat_id in list(alert_subscribers):
                 await context.bot.send_message(
                     chat_id=chat_id, text=text,
-                    parse_mode=ParseMode.MARKDOWN,
+                    parse_mode=ParseMode.HTML,
                     reply_markup=main_keyboard()
                 )
     except Exception as e:
