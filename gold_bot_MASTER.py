@@ -1,4 +1,4 @@
- #!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════════════╗
 ║          GOLD MASTER BOT — Telegram Edition                     ║
@@ -86,10 +86,43 @@ from telegram.ext import (
 )
 from telegram.constants import ParseMode
 
+from telegram.helpers import escape_markdown
+
+# SAFE TELEGRAM PATCH
+from telegram import Message
+from telegram import Bot as _BotClass
+
+async def _safe_reply_text(self, text, *args, **kwargs):
+    try:
+        safe_text = escape_markdown(text, version=2)
+        kwargs['parse_mode'] = ParseMode.MARKDOWN_V2
+        return await _orig_reply_text(self, safe_text, *args, **kwargs)
+    except Exception:
+        return await _orig_reply_text(self, text, *args, **kwargs)
+
+async def _safe_send_message(self, *args, **kwargs):
+    try:
+        if 'text' in kwargs:
+            kwargs['text'] = escape_markdown(kwargs['text'], version=2)
+            kwargs['parse_mode'] = ParseMode.MARKDOWN_V2
+        return await _orig_send_message(self, *args, **kwargs)
+    except Exception:
+        return await _orig_send_message(self, *args, **kwargs)
+
+if not hasattr(Message, '_patched_safe'):
+    _orig_reply_text = Message.reply_text
+    Message.reply_text = _safe_reply_text
+    Message._patched_safe = True
+
+if not hasattr(_BotClass, '_patched_safe'):
+    _orig_send_message = _BotClass.send_message
+    _BotClass.send_message = _safe_send_message
+    _BotClass._patched_safe = True
+
+
 # ════════════════════════════════════════════════════════════════
 #  ⚠️  CONFIG — ضع بياناتك هنا أو في environment variables
 # ════════════════════════════════════════════════════════════════
-
 # Telegram Bot Token — احصل عليه من @BotFather
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1OwbztbIZ5KzNo0")
 
@@ -332,6 +365,7 @@ def get_price() -> Optional[float]:
         return d['close'][-1] if d else None
 
 _egypt_gold_cache = {'data': None, 'time': 0}
+_usd_egp_cache = {'rate': None, 'time': 0}
 
 def ar_to_en(s: str) -> str:
     for i, d in enumerate('٠١٢٣٤٥٦٧٨٩'):
@@ -505,6 +539,31 @@ def fmt_egypt_gold_msg(gold_usd: float) -> str:
             f"🕐 {now_local().strftime('%H:%M:%S')} GMT+2",
         ]
     return '\n'.join(lines)
+
+
+_price_cache = {'value': None, 'time': 0}
+
+def get_price_cached():
+    now = time.time()
+    if _price_cache['value'] and now - _price_cache['time'] < 5:
+        return _price_cache['value']
+    price = get_price()
+    if price:
+        _price_cache['value'] = price
+        _price_cache['time'] = now
+    return price
+
+_ohlcv_cache = {}
+
+def fetch_ohlcv_cached(interval, size):
+    key = f"{interval}_{size}"
+    now = time.time()
+    if key in _ohlcv_cache and now - _ohlcv_cache[key]['time'] < 30:
+        return _ohlcv_cache[key]['data']
+    data = fetch_ohlcv(interval, size)
+    if data:
+        _ohlcv_cache[key] = {'data': data, 'time': now}
+    return data
 
 # ════════════════════════════════════════════════════════════════
 #  INDICATORS — Correct implementations
