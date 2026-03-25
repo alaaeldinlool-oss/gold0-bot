@@ -1371,37 +1371,54 @@ async def track_sessions(context):
 
 
 async def cmd_session_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض تاريخ آخر 3 سيشنات من MongoDB"""
-    await update.message.reply_text("⏳ جاري جلب تاريخ السيشنات...")
+    """ملخص سيشنات اليوم"""
+    await update.message.reply_text("⏳ جاري جلب ملخص السيشنات...")
     db = get_db()
     if db is None:
-        await update.message.reply_text(
-            "❌ MongoDB غير متصل.",
-            reply_markup=main_keyboard()
-        )
+        await update.message.reply_text("❌ MongoDB غير متصل.", reply_markup=main_keyboard())
         return
-
     try:
-        records = list(db.sessions.find().sort('time', -1).limit(6))
+        today = now_local().strftime('%Y-%m-%d')
+        # جيب سيشنات اليوم أولاً
+        records = list(db.sessions.find({'date': today}).sort('time', 1))
+        # لو مفيش اليوم، جيب آخر 6 سيشنات
+        if not records:
+            records = list(db.sessions.find().sort('time', -1).limit(6))
+            label = "آخر السيشنات المسجّلة"
+        else:
+            label = f"سيشنات اليوم - {today}"
+
         if not records:
             await update.message.reply_text(
                 "📊 لا يوجد سيشنات مسجّلة بعد.\n"
-                "سيتم التسجيل تلقائياً عند فتح/إغلاق كل سيشن.",
+                "يتم التسجيل تلقائياً عند إغلاق كل سيشن.",
                 reply_markup=main_keyboard()
             )
             return
 
-        lines = ["📋 تاريخ آخر السيشنات:\n"]
+        lines = [f"📋 {label}\n"]
+        total_chg = 0
         for r in records:
             icon  = '🌏' if r['session']=='asian' else '🏦' if r['session']=='london' else '🗽'
             chg_i = '📈' if r['change'] >= 0 else '📉'
             sign  = '+' if r['change'] >= 0 else ''
+            total_chg += r['change']
+            # وقت الفتح والإغلاق
+            t = r.get('time', '')[:16].replace('T', ' ') if r.get('time') else ''
             lines.append(
-                f"{icon} *{r['name']}* - {r.get('date','')}\n"
-                f"   فتح: `{r['open']:.2f}` ← إغلاق: `{r['close']:.2f}`\n"
+                f"{icon} {r['name']}\n"
+                f"   🟢 فتح:   {r['open']:.2f}\n"
+                f"   🔴 إغلاق: {r['close']:.2f}\n"
                 f"   {chg_i} {sign}{r['change']:.2f}$ ({sign}{r['change_pct']:.2f}%)\n"
-                f"   📏 نطاق: `{r['range']:.2f}$`\n"
+                f"   📏 نطاق: {r['range']:.2f}$\n"
             )
+
+        # ملخص اليوم
+        if len(records) > 1:
+            sign = '+' if total_chg >= 0 else ''
+            icon = '📈' if total_chg >= 0 else '📉'
+            lines.append(f"{'─'*25}")
+            lines.append(f"{icon} إجمالي اليوم: {sign}{total_chg:.2f}$")
 
         await update.message.reply_text(
             '\n'.join(lines),
@@ -1410,6 +1427,51 @@ async def cmd_session_history(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
     except Exception as e:
         await update.message.reply_text(f"❌ خطأ: {str(e)[:100]}")
+
+
+async def send_daily_sessions_summary(context):
+    """يبعت ملخص سيشنات اليوم تلقائياً عند انتهاء سيشن New York (21 UTC)"""
+    if not alert_subscribers:
+        return
+    db = get_db()
+    if db is None:
+        return
+    try:
+        today = now_local().strftime('%Y-%m-%d')
+        records = list(db.sessions.find({'date': today}).sort('time', 1))
+        if not records:
+            return
+
+        lines = [f"📋 ملخص سيشنات اليوم - {today}\n"]
+        total_chg = 0
+        for r in records:
+            icon  = '🌏' if r['session']=='asian' else '🏦' if r['session']=='london' else '🗽'
+            chg_i = '📈' if r['change'] >= 0 else '📉'
+            sign  = '+' if r['change'] >= 0 else ''
+            total_chg += r['change']
+            lines.append(
+                f"{icon} {r['name']}\n"
+                f"   🟢 فتح: {r['open']:.2f} | 🔴 إغلاق: {r['close']:.2f}\n"
+                f"   {chg_i} {sign}{r['change']:.2f}$ ({sign}{r['change_pct']:.2f}%)\n"
+            )
+
+        sign = '+' if total_chg >= 0 else ''
+        icon = '📈' if total_chg >= 0 else '📉'
+        lines.append(f"{'─'*25}")
+        lines.append(f"{icon} إجمالي اليوم: {sign}{total_chg:.2f}$")
+
+        text = '\n'.join(lines)
+        for chat_id in list(alert_subscribers):
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id, text=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=main_keyboard()
+                )
+            except Exception as e:
+                log.warning(f"daily sessions summary error: {e}")
+    except Exception as e:
+        log.error(f"send_daily_sessions_summary error: {e}")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -3195,6 +3257,8 @@ def main():
         # تقرير أسبوعي كل جمعة 21:00 UTC
         from datetime import time as dtime
         jq.run_daily(send_weekly_report, time=dtime(21, 0), days=(4,))
+        # ملخص سيشنات اليوم بعد إغلاق NY (21:30 UTC)
+        jq.run_daily(send_daily_sessions_summary, time=dtime(21, 30))
 
     print("✅ Bot is running! Press Ctrl+C to stop.")
     try:
