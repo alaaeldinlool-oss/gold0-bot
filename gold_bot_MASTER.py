@@ -87,16 +87,13 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 from telegram.helpers import escape_markdown
-
 # SAFE TELEGRAM PATCH
 from telegram import Message
 from telegram import Bot as _BotClass
 
 async def _safe_reply_text(self, text, *args, **kwargs):
     try:
-        async def _safe_reply_text(self, text, *args, **kwargs):
-    try:
-        # تحويل النجوم لـ HTML
+        # تحويل * إلى bold HTML بشكل بسيط
         text = text.replace("*", "<b>").replace("<b><b>", "</b>")
         kwargs['parse_mode'] = ParseMode.HTML
         return await _orig_reply_text(self, text, *args, **kwargs)
@@ -114,19 +111,9 @@ async def _safe_send_message(self, *args, **kwargs):
         return await _orig_send_message(self, *args, **kwargs)
     except Exception:
         return await _orig_send_message(self, *args, **kwargs)
-        return await _orig_reply_text(self, safe_text, *args, **kwargs)
-    except Exception:
-        return await _orig_reply_text(self, text, *args, **kwargs)
 
-async def _safe_send_message(self, *args, **kwargs):
-    try:
-        if 'text' in kwargs:
-            kwargs['text'] = escape_markdown(kwargs['text'], version=2)
-            kwargs['parse_mode'] = ParseMode.MARKDOWN_V2
-        return await _orig_send_message(self, *args, **kwargs)
-    except Exception:
-        return await _orig_send_message(self, *args, **kwargs)
 
+# Apply patch مرة واحدة بس
 if not hasattr(Message, '_patched_safe'):
     _orig_reply_text = Message.reply_text
     Message.reply_text = _safe_reply_text
@@ -136,8 +123,6 @@ if not hasattr(_BotClass, '_patched_safe'):
     _orig_send_message = _BotClass.send_message
     _BotClass.send_message = _safe_send_message
     _BotClass._patched_safe = True
-
-
 # ════════════════════════════════════════════════════════════════
 #  ⚠️  CONFIG — ضع بياناتك هنا أو في environment variables
 # ════════════════════════════════════════════════════════════════
