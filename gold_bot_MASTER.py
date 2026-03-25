@@ -333,67 +333,75 @@ def get_price() -> Optional[float]:
 
 _egypt_gold_cache = {'data': None, 'time': 0}
 
+def ar_to_en(s: str) -> str:
+    """تحويل الأرقام العربية للإنجليزية"""
+    for i, d in enumerate('٠١٢٣٤٥٦٧٨٩'):
+        s = s.replace(d, str(i))
+    return s
+
 def get_egypt_gold_prices() -> Optional[dict]:
-    """جيب أسعار الذهب المحلية من gold-price-live.com"""
+    """جيب أسعار الذهب من goldbullioneg.com"""
     global _egypt_gold_cache
     now_t = time.time()
     if _egypt_gold_cache['data'] and now_t - _egypt_gold_cache['time'] < 1800:
         return _egypt_gold_cache['data']
     try:
         import re
-        r    = requests.get('https://gold-price-live.com/', timeout=10,
-                            headers={'User-Agent': 'Mozilla/5.0'})
-        text = r.text
+        url = 'https://goldbullioneg.com/%d8%a3%d8%b3%d8%b9%d8%a7%d8%b1-%d8%a7%d9%84%d8%b0%d9%87%d8%a8/'
+        r   = requests.get(url, timeout=10,
+                           headers={'User-Agent': 'Mozilla/5.0'})
+        text = ar_to_en(r.text)
 
-        def get_karat(karat):
-            # الشكل: [بيع 7171\n7220\nعيار 21]
-            pat = rf'بيع\s+(\d[\d,]+)\s*\n\s*(\d[\d,]+)\s*\n\s*عيار {karat}'
-            m   = re.search(pat, text)
-            if m:
-                v1 = float(m.group(1).replace(',', ''))
-                v2 = float(m.group(2).replace(',', ''))
-                if 4000 < v1 < 15000 and 4000 < v2 < 15000:
-                    return min(v1,v2), max(v1,v2)  # sell, buy
-            # شكل بديل: رقم واحد فقط
-            pat2 = rf'(\d[\d,]+)\s*\n\s*عيار {karat}'
-            m2   = re.search(pat2, text)
-            if m2:
-                v = float(m2.group(1).replace(',', ''))
-                if 4000 < v < 15000:
-                    return v, v
-            return None, None
-
-        def get_rate(label):
-            pat = rf'{label}\s*\n\s*([\d.]+)\s*جنيه'
-            m   = re.search(pat, text)
-            if m:
-                v = float(m.group(1))
-                if v > 10:
-                    return v
+        def get_karat(k):
+            patterns = [
+                rf'عيار\s*{k}\s*الآن\s*:\s*(\d+)',
+                rf'عيار\s*{k}[^>]*>\s*(\d[\d,]+)',
+                rf'(\d[\d,]+)\s*.*?عيار\s*{k}',
+            ]
+            for pat in patterns:
+                m = re.search(pat, text)
+                if m:
+                    v = float(m.group(1).replace(',', ''))
+                    if 3000 < v < 20000:
+                        return v
             return None
 
-        g21_sell, g21_buy = get_karat(21)
-        g18_sell, g18_buy = get_karat(18)
-        g24_sell, g24_buy = get_karat(24)
-        dollar_bank  = get_rate('الدولار في البنوك')
-        dollar_sagha = get_rate('دولار الصاغة الآن')
+        def get_dollar():
+            patterns = [
+                r'الدولار\s*:\s*([\d.]+)',
+                r'سعر\s*الدولار\s*:\s*([\d.]+)',
+                r'USD\s*:\s*([\d.]+)',
+                r'(5[0-9]\.\d+)\s*جنيه',
+            ]
+            for pat in patterns:
+                m = re.search(pat, text)
+                if m:
+                    v = float(m.group(1))
+                    if 40 < v < 100:
+                        return v
+            return None
 
-        if g21_buy and 4000 < g21_buy < 15000:
+        g21 = get_karat(21)
+        g18 = get_karat(18)
+        g24 = get_karat(24)
+        usd = get_dollar()
+
+        if g21 and 3000 < g21 < 20000:
             data = {
-                'gram_21_buy':  g21_buy,
-                'gram_21_sell': g21_sell,
-                'gram_24':      g24_buy,
-                'gram_18':      g18_buy,
-                'dollar_bank':  dollar_bank,
-                'dollar_sagha': dollar_sagha,
+                'gram_21_buy':  g21,
+                'gram_21_sell': round(g21 * 0.993, 0),  # شراء أقل بـ 0.7%
+                'gram_18':      g18 or round(g21 * 0.857, 0),
+                'gram_24':      g24 or round(g21 * 1.143, 0),
+                'dollar_bank':  usd,
+                'dollar_sagha': usd,
             }
             _egypt_gold_cache = {'data': data, 'time': now_t}
-            log.info(f"✅ Egypt gold: 21k={g21_buy}, USD={dollar_bank}")
+            log.info(f"✅ Egypt gold from goldbullioneg: 21k={g21}, USD={usd}")
             return data
         else:
-            log.warning(f"Egypt gold: invalid data g21={g21_buy}")
+            log.warning(f"goldbullioneg: invalid g21={g21}")
     except Exception as e:
-        log.warning(f"Egypt gold scrape failed: {e}")
+        log.warning(f"goldbullioneg scrape failed: {e}")
     return None
 
 
@@ -495,7 +503,7 @@ def fmt_egypt_gold_msg(gold_usd: float) -> str:
             "",
             f"🏅 الأوقية: *{ounce:,.0f} جنيه*",
             "",
-            "📡 المصدر: gold-price-live.com",
+            "📡 المصدر: goldbullioneg.com",
             f"🕐 {now_local().strftime('%H:%M:%S')} GMT+2",
         ]
     else:
