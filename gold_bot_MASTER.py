@@ -771,42 +771,35 @@ def calc_fibonacci(H: float, L: float) -> dict:
 # ════════════════════════════════════════════════════════════════
 
 def calc_gann_square(price: float) -> dict:
-    """
-    Gann Square of Nine — يحسب مستويات الدعم والمقاومة
-    حول السعر الحالي على مربع التسعة
-    """
+    """Gann Square of Nine — مستويات دعم ومقاومة"""
     import math
-    # حساب الجذر التربيعي للسعر
     root = math.sqrt(price)
-    
-    # مستويات Gann (زيادة/نقص 0.25 على الجذر = ربع دورة)
-    levels = {}
-    angles = [0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0]
-    labels = ['0°', '90°', '180°', '270°', '360°', '540°', '720°']
-    
+
     resistance = []
     support    = []
-    
-    for i, (ang, lbl) in enumerate(zip(angles, labels)):
-        r_level = round((root + ang) ** 2, 3)
-        s_level = round((root - ang) ** 2, 3)
-        if r_level > price:
-            resistance.append({'level': r_level, 'angle': lbl})
-        if s_level > 0 and s_level < price:
-            support.append({'level': s_level, 'angle': lbl})
-    
-    # Cardinal Cross levels (90° intervals)
-    cardinals = []
+
+    # نحسب 8 مستويات فوق وتحت بزيادة ربع دورة (0.25)
     for i in range(1, 9):
-        c = round((root + i * 0.25) ** 2, 3)
-        cardinals.append(c)
-    
+        step = i * 0.25
+        r = round((root + step) ** 2, 2)
+        s = round(max(root - step, 0) ** 2, 2)
+        angle = f"{int(i*90)}°"
+        if r > price:
+            resistance.append({'level': r, 'angle': angle})
+        if 0 < s < price:
+            support.append({'level': s, 'angle': angle})
+
+    # Cardinal Cross (أقرب 4 مستويات فوق وتحت)
+    cardinals_up   = [r['level'] for r in resistance[:4]]
+    cardinals_down = [s['level'] for s in support[:4]]
+
     return {
         'price':      price,
         'root':       round(root, 4),
         'resistance': resistance[:5],
-        'support':    sorted(support, reverse=True)[:5],
-        'cardinals':  cardinals[:8],
+        'support':    support[:5],
+        'cardinals_up':   cardinals_up,
+        'cardinals_down': cardinals_down,
     }
 
 
@@ -1482,6 +1475,57 @@ async def cmd_session_history(update: Update, context: ContextTypes.DEFAULT_TYPE
             label = f"سيشنات اليوم - {today}"
 
         if not records:
+            # Fallback: احسب السيشنات من بيانات TwelveData
+            try:
+                d = fetch_ohlcv('1h', 24)
+                if d and d.get('close'):
+                    today = now_local().strftime('%Y-%m-%d')
+                    sessions_def = {
+                        'asian':   {'start': 0,  'end': 8,  'icon': '🌏', 'name': 'Asian Session'},
+                        'london':  {'start': 8,  'end': 16, 'icon': '🏦', 'name': 'London Session'},
+                        'newyork': {'start': 13, 'end': 21, 'icon': '🗽', 'name': 'New York Session'},
+                    }
+                    lines = [f"📋 سيشنات اليوم (محسوبة) - {today}\n"]
+                    total_chg = 0
+                    for key, cfg in sessions_def.items():
+                        # فلتر الشمعات في وقت السيشن
+                        s_candles = [
+                            i for i, t in enumerate(d['time'])
+                            if today in t and cfg['start'] <= int(t[11:13]) < cfg['end']
+                        ]
+                        if not s_candles:
+                            continue
+                        open_p  = d['open'][s_candles[0]]
+                        close_p = d['close'][s_candles[-1]]
+                        high_p  = max(d['high'][i] for i in s_candles)
+                        low_p   = min(d['low'][i]  for i in s_candles)
+                        chg     = close_p - open_p
+                        chg_pct = (chg / open_p * 100) if open_p else 0
+                        rng     = high_p - low_p
+                        chg_i   = '📈' if chg >= 0 else '📉'
+                        sign    = '+' if chg >= 0 else ''
+                        total_chg += chg
+                        lines.append(
+                            f"{cfg['icon']} {cfg['name']}\n"
+                            f"   🟢 فتح:   {open_p:.2f}\n"
+                            f"   🔴 إغلاق: {close_p:.2f}\n"
+                            f"   {chg_i} {sign}{chg:.2f}$ ({sign}{chg_pct:.2f}%)\n"
+                            f"   📏 نطاق: {rng:.2f}$\n"
+                        )
+                    if len(lines) > 1:
+                        sign = '+' if total_chg >= 0 else ''
+                        icon = '📈' if total_chg >= 0 else '📉'
+                        lines.append(f"{'─'*25}")
+                        lines.append(f"{icon} إجمالي اليوم: {sign}{total_chg:.2f}$")
+                        await update.message.reply_text(
+                            '\n'.join(lines),
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=main_keyboard()
+                        )
+                        return
+            except Exception as e:
+                log.warning(f"session fallback error: {e}")
+
             await update.message.reply_text(
                 "📊 لا يوجد سيشنات مسجّلة بعد.\n"
                 "يتم التسجيل تلقائياً عند إغلاق كل سيشن.",
@@ -2410,17 +2454,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     sign   = "+" if chg >= 0 else ""
                     text = (
                         f"🥇 GOLD / USD\n"
-                        f"💰 السعر: *{fmt_price(price)}*\n\n"
-                        f"{chg_icon} التغير (2 ساعة): *{sign}{chg:.2f}$ ({sign}{chg_pct:.2f}%)*\n"
-                        f"📊 أعلى سعر:  `{fmt_price(high)}`\n"
-                        f"📊 أدنى سعر:  `{fmt_price(low)}`\n\n"
+                        f"💰 السعر: {fmt_price(price)}\n\n"
+                        f"{chg_icon} التغير (2 ساعة): {sign}{chg:.2f}$ ({sign}{chg_pct:.2f}%)\n"
+                        f"📊 أعلى سعر:  {fmt_price(high)}\n"
+                        f"📊 أدنى سعر:  {fmt_price(low)}\n\n"
                         f"🕐 {now_local().strftime('%H:%M:%S')} (GMT+2)"
                     )
                 else:
                     raise Exception()
             except:
                 text = (f"🥇 GOLD / USD\n"
-                        f"💰 *{fmt_price(price)}*\n"
+                        f"💰 {fmt_price(price)}\n"
                         f"🕐 {now_local().strftime('%H:%M:%S')} (GMT+2)")
         else:
             text = "❌ فشل جلب السعر. تحقق من API Key."
@@ -2549,23 +2593,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             g = calc_gann_square(price)
             lines = [
                 f"⬜ GANN SQUARE OF NINE",
-                f"السعر: {price:.3f}  |  الجذر: {g['root']}",
+                f"السعر: {price:.2f}  |  الجذر: {g['root']}",
                 "",
-                "📈 مستويات المقاومة:",
+                "📈 مقاومة:",
             ]
             for r in g['resistance']:
-                lines.append(f"  ▲ {r['level']:.3f}  ({r['angle']})")
+                diff = r['level'] - price
+                lines.append(f"  ▲ {r['level']:.2f}  ({r['angle']})  +{diff:.2f}$")
             lines.append("")
-            lines.append("📉 مستويات الدعم:")
+            lines.append("📉 دعم:")
             for s in g['support']:
-                lines.append(f"  ▼ {s['level']:.3f}  ({s['angle']})")
-            lines += [
-                "",
-                "🔄 Cardinal Cross (كل 90°):",
-            ]
-            for i, c in enumerate(g['cardinals']):
-                arrow = "▲" if c > price else "▼"
-                lines.append(f"  {arrow} {c:.3f}")
+                diff = price - s['level']
+                lines.append(f"  ▼ {s['level']:.2f}  ({s['angle']})  -{diff:.2f}$")
             text = '\n'.join(lines)
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
