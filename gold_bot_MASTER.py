@@ -179,7 +179,6 @@ MONGODB_URI     = os.getenv("MONGODB_URI",     "mongodb+srv://alaaeldinlool_db_u
 # Chat IDs for daily reports (أضف الـ chat IDs اللي تحب ترسلها)
 REPORT_CHAT_IDS = [6141014695]  #
 
-
 # ════════════════════════════════════════════════════════════════
 #  LOGGING
 # ════════════════════════════════════════════════════════════════
@@ -3294,3 +3293,148 @@ def get_usd_egp():
 
 if __name__ == "__main__":
     main()
+
+
+# ================= QUANTUM MODE =================
+trade_history = []
+
+def track_trade(entry, direction, tp, sl):
+    trade_history.append({
+        'entry': entry,
+        'direction': direction,
+        'tp': tp,
+        'sl': sl,
+        'time': time.time()
+    })
+
+def calculate_winrate():
+    if not trade_history:
+        return 0
+    wins = sum(1 for t in trade_history if t.get('result') == 'win')
+    return round((wins / len(trade_history)) * 100, 2)
+
+
+def ai_scenario(sig):
+    if sig['direction'] == 'BULLISH':
+        return "📈 السيناريو: استمرار صعود طالما أعلى الدعم"
+    elif sig['direction'] == 'BEARISH':
+        return "📉 السيناريو: هبوط طالما تحت المقاومة"
+    return "⏳ السوق عرضي حالياً"
+
+
+async def cmd_quantum(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("💀 Quantum Analysis...")
+
+    d = await asyncio.to_thread(fetch_ohlcv, '5min', 100)
+
+    if not d:
+        await update.message.reply_text("❌ البيانات غير متاحة")
+        return
+
+    sig = full_analysis(d)
+
+    tp = sig['price'] + sig['ATR'] * 2
+    sl = sig['price'] - sig['ATR']
+
+    track_trade(sig['price'], sig['direction'], tp, sl)
+
+    scenario = ai_scenario(sig)
+    winrate = calculate_winrate()
+
+    text = f"""
+💀 <b>QUANTUM MODE</b>
+
+📊 الاتجاه: <b>{sig['direction']}</b>
+💰 السعر: <b>${sig['price']:.2f}</b>
+
+🎯 TP: <b>${tp:.2f}</b>
+🛑 SL: <b>${sl:.2f}</b>
+
+🧠 {scenario}
+
+📊 Winrate: <b>{winrate}%</b>
+"""
+
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+# register
+try:
+    app.add_handler(CommandHandler("quantum", cmd_quantum))
+except:
+    pass
+
+# ===============================================
+
+
+# ================= AUTONOMOUS AI =================
+
+def ai_decision(sig, confidence):
+    if confidence >= 80:
+        return "EXECUTE"
+    elif confidence >= 60:
+        return "WATCH"
+    else:
+        return "SKIP"
+
+
+def calculate_position(balance, risk_percent, entry, sl):
+    risk_amount = balance * (risk_percent / 100)
+    stop_distance = abs(entry - sl)
+
+    if stop_distance == 0:
+        return 0
+
+    lot_size = risk_amount / stop_distance
+    return round(lot_size, 2)
+
+
+async def cmd_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🤖 Autonomous AI Running...")
+
+    d = await asyncio.to_thread(fetch_ohlcv, '5min', 100)
+
+    if not d:
+        await update.message.reply_text("❌ البيانات غير متاحة")
+        return
+
+    sig = full_analysis(d)
+    ob = detect_order_blocks_pro(d)
+    fvg = detect_fvg_pro(d)
+
+    conf = calculate_confidence(sig, ob, fvg)
+    decision = ai_decision(sig, conf)
+
+    entry = smart_entry(sig['price'], ob, fvg, sig['direction'])
+
+    if sig['direction'] == "BULLISH":
+        tp = entry + sig['ATR'] * 2
+        sl = entry - sig['ATR']
+    else:
+        tp = entry - sig['ATR'] * 2
+        sl = entry + sig['ATR']
+
+    lot = calculate_position(10000, 1, entry, sl)
+
+    text = f"""
+🤖 <b>AUTONOMOUS AI</b>
+
+📊 الاتجاه: <b>{sig['direction']}</b>
+🎯 القرار: <b>{decision}</b>
+
+💰 Entry: <b>${entry:.2f}</b>
+🎯 TP: <b>${tp:.2f}</b>
+🛑 SL: <b>${sl:.2f}</b>
+
+💼 Position Size: <b>{lot}</b>
+🧠 Confidence: <b>{conf}%</b>
+"""
+
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+# register safely
+try:
+    app.add_handler(CommandHandler("auto", cmd_auto))
+except:
+    pass
+
+# ================================================
