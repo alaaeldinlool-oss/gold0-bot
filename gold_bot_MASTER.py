@@ -440,8 +440,8 @@ def get_egypt_gold_prices() -> Optional[dict]:
         g18 = round(eg['gram_18'] * margin)
         g14 = round(eg['gram_14'] * margin)
 
-        # دولار الصاغة = دولار البنك - 0.5 إلى 1 جنيه (فرق السوق المصري)
-        usd_sagha = round(usd_egp - 0.55, 2)
+        # دولار البنك الحقيقي من gold-price-live
+        usd_sagha = get_sagha_rate()
 
         data = {
             'gram_21_buy':  g21,
@@ -463,13 +463,39 @@ def get_egypt_gold_prices() -> Optional[dict]:
 
 
 def get_usd_egp() -> Optional[float]:
-    """جيب سعر الدولار — من TwelveData أو APIs مجانية"""
+    """جيب سعر الدولار — من gold-price-live.com أو TwelveData أو APIs مجانية"""
     global _usd_egp_cache
     now_t = time.time()
     if _usd_egp_cache['rate'] and now_t - _usd_egp_cache['time'] < 1800:
         return _usd_egp_cache['rate']
 
-    # ── المصدر الأول: TwelveData (نفس الـ API Key بتاعنا) ──
+    # ── المصدر الأول: gold-price-live.com (الأدق للسوق المصري) ──
+    try:
+        import re
+        r = requests.get('https://gold-price-live.com/', timeout=8,
+                         headers={'User-Agent': 'Mozilla/5.0'})
+        text = r.text
+
+        # دولار البنوك
+        m_bank = re.search(r'الدولار في البنوك\s*\n\s*([\d.]+)\s*جنيه', text)
+        # دولار الصاغة
+        m_sagha = re.search(r'دولار الصاغة الآن\s*\n\s*([\d.]+)\s*جنيه', text)
+
+        bank_rate  = float(m_bank.group(1))  if m_bank  else None
+        sagha_rate = float(m_sagha.group(1)) if m_sagha else None
+
+        if bank_rate and 40 < bank_rate < 100:
+            _usd_egp_cache = {
+                'rate':       bank_rate,
+                'sagha_rate': sagha_rate or round(bank_rate - 0.55, 2),
+                'time':       now_t
+            }
+            log.info(f"✅ USD/EGP from gold-price-live: bank={bank_rate}, sagha={sagha_rate}")
+            return bank_rate
+    except Exception as e:
+        log.warning(f"gold-price-live USD/EGP failed: {e}")
+
+    # ── المصدر الثاني: TwelveData ──
     try:
         url  = f"https://api.twelvedata.com/price?symbol=USD/EGP&apikey={TWELVEDATA_KEY}"
         r    = requests.get(url, timeout=8)
@@ -477,7 +503,7 @@ def get_usd_egp() -> Optional[float]:
         if 'price' in data:
             rate = float(data['price'])
             if rate > 0:
-                _usd_egp_cache = {'rate': rate, 'time': now_t}
+                _usd_egp_cache = {'rate': rate, 'sagha_rate': round(rate - 0.55, 2), 'time': now_t}
                 log.info(f"✅ USD/EGP from TwelveData: {rate}")
                 return rate
     except Exception as e:
@@ -496,15 +522,20 @@ def get_usd_egp() -> Optional[float]:
             if key in data and 'EGP' in data[key]:
                 rate = float(data[key]['EGP'])
                 if rate > 0:
-                    _usd_egp_cache = {'rate': rate, 'time': now_t}
+                    _usd_egp_cache = {'rate': rate, 'sagha_rate': round(rate - 0.55, 2), 'time': now_t}
                     log.info(f"✅ USD/EGP from {url}: {rate}")
                     return rate
         except Exception as e:
             log.warning(f"USD/EGP failed {url}: {e}")
 
-    if _usd_egp_cache['rate']:
+    if _usd_egp_cache.get('rate'):
         return _usd_egp_cache['rate']
     return None
+
+def get_sagha_rate() -> float:
+    """جيب سعر دولار الصاغة"""
+    get_usd_egp()  # refresh cache
+    return _usd_egp_cache.get('sagha_rate') or (_usd_egp_cache.get('rate', 52.0) - 0.55)
 
 def calc_egypt_gold(gold_usd: float, usd_egp: float) -> dict:
     """
