@@ -94,8 +94,26 @@ from telegram import Bot as _BotClass
 
 async def _safe_reply_text(self, text, *args, **kwargs):
     try:
-        safe_text = escape_markdown(text, version=2)
-        kwargs['parse_mode'] = ParseMode.MARKDOWN_V2
+        async def _safe_reply_text(self, text, *args, **kwargs):
+    try:
+        # تحويل النجوم لـ HTML
+        text = text.replace("*", "<b>").replace("<b><b>", "</b>")
+        kwargs['parse_mode'] = ParseMode.HTML
+        return await _orig_reply_text(self, text, *args, **kwargs)
+    except Exception:
+        return await _orig_reply_text(self, text, *args, **kwargs)
+
+
+async def _safe_send_message(self, *args, **kwargs):
+    try:
+        if 'text' in kwargs:
+            txt = kwargs['text']
+            txt = txt.replace("*", "<b>").replace("<b><b>", "</b>")
+            kwargs['text'] = txt
+            kwargs['parse_mode'] = ParseMode.HTML
+        return await _orig_send_message(self, *args, **kwargs)
+    except Exception:
+        return await _orig_send_message(self, *args, **kwargs)
         return await _orig_reply_text(self, safe_text, *args, **kwargs)
     except Exception:
         return await _orig_reply_text(self, text, *args, **kwargs)
