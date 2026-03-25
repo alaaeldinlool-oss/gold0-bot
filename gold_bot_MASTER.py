@@ -806,31 +806,25 @@ def calc_gann_square(price: float) -> dict:
     import math
     root = math.sqrt(price)
 
+    # الزوايا الصحيحة: كل 0.25 على الجذر = 45° على المربع
+    angle_labels = ['45°', '90°', '135°', '180°', '225°', '270°', '315°', '360°']
     resistance = []
     support    = []
 
-    # نحسب 8 مستويات فوق وتحت بزيادة ربع دورة (0.25)
-    for i in range(1, 9):
+    for i, lbl in enumerate(angle_labels, 1):
         step = i * 0.25
         r = round((root + step) ** 2, 2)
-        s = round(max(root - step, 0) ** 2, 2)
-        angle = f"{int(i*90)}°"
+        s = round(max(root - step, 0.1) ** 2, 2)
         if r > price:
-            resistance.append({'level': r, 'angle': angle})
+            resistance.append({'level': r, 'angle': lbl})
         if 0 < s < price:
-            support.append({'level': s, 'angle': angle})
-
-    # Cardinal Cross (أقرب 4 مستويات فوق وتحت)
-    cardinals_up   = [r['level'] for r in resistance[:4]]
-    cardinals_down = [s['level'] for s in support[:4]]
+            support.append({'level': s, 'angle': lbl})
 
     return {
         'price':      price,
         'root':       round(root, 4),
         'resistance': resistance[:5],
         'support':    support[:5],
-        'cardinals_up':   cardinals_up,
-        'cardinals_down': cardinals_down,
     }
 
 
