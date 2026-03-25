@@ -334,74 +334,52 @@ def get_price() -> Optional[float]:
 _egypt_gold_cache = {'data': None, 'time': 0}
 
 def ar_to_en(s: str) -> str:
-    """تحويل الأرقام العربية للإنجليزية"""
     for i, d in enumerate('٠١٢٣٤٥٦٧٨٩'):
         s = s.replace(d, str(i))
     return s
 
 def get_egypt_gold_prices() -> Optional[dict]:
-    """جيب أسعار الذهب من goldbullioneg.com"""
+    """احسب أسعار الذهب المصري من TwelveData (USD/EGP + XAU/USD)"""
     global _egypt_gold_cache
     now_t = time.time()
-    if _egypt_gold_cache['data'] and now_t - _egypt_gold_cache['time'] < 1800:
+    if _egypt_gold_cache['data'] and now_t - _egypt_gold_cache['time'] < 600:
         return _egypt_gold_cache['data']
     try:
-        import re
-        url = 'https://goldbullioneg.com/%d8%a3%d8%b3%d8%b9%d8%a7%d8%b1-%d8%a7%d9%84%d8%b0%d9%87%d8%a8/'
-        r   = requests.get(url, timeout=10,
-                           headers={'User-Agent': 'Mozilla/5.0'})
-        text = ar_to_en(r.text)
-
-        def get_karat(k):
-            patterns = [
-                rf'عيار\s*{k}\s*الآن\s*:\s*(\d+)',
-                rf'عيار\s*{k}[^>]*>\s*(\d[\d,]+)',
-                rf'(\d[\d,]+)\s*.*?عيار\s*{k}',
-            ]
-            for pat in patterns:
-                m = re.search(pat, text)
-                if m:
-                    v = float(m.group(1).replace(',', ''))
-                    if 3000 < v < 20000:
-                        return v
+        # جيب سعر الدولار من TwelveData
+        usd_egp = get_usd_egp()
+        if not usd_egp:
             return None
 
-        def get_dollar():
-            patterns = [
-                r'الدولار\s*:\s*([\d.]+)',
-                r'سعر\s*الدولار\s*:\s*([\d.]+)',
-                r'USD\s*:\s*([\d.]+)',
-                r'(5[0-9]\.\d+)\s*جنيه',
-            ]
-            for pat in patterns:
-                m = re.search(pat, text)
-                if m:
-                    v = float(m.group(1))
-                    if 40 < v < 100:
-                        return v
+        # جيب سعر الذهب العالمي
+        gold_usd = get_price_cached()
+        if not gold_usd:
             return None
 
-        g21 = get_karat(21)
-        g18 = get_karat(18)
-        g24 = get_karat(24)
-        usd = get_dollar()
+        # احسب الأسعار المحلية
+        eg = calc_egypt_gold(gold_usd, usd_egp)
 
-        if g21 and 3000 < g21 < 20000:
-            data = {
-                'gram_21_buy':  g21,
-                'gram_21_sell': round(g21 * 0.993, 0),  # شراء أقل بـ 0.7%
-                'gram_18':      g18 or round(g21 * 0.857, 0),
-                'gram_24':      g24 or round(g21 * 1.143, 0),
-                'dollar_bank':  usd,
-                'dollar_sagha': usd,
-            }
-            _egypt_gold_cache = {'data': data, 'time': now_t}
-            log.info(f"✅ Egypt gold from goldbullioneg: 21k={g21}, USD={usd}")
-            return data
-        else:
-            log.warning(f"goldbullioneg: invalid g21={g21}")
+        # هامش السوق المحلي المصري (عادة +2% على السعر العالمي)
+        margin = 1.02
+        g21 = round(eg['gram_21'] * margin)
+        g24 = round(eg['gram_24'] * margin)
+        g18 = round(eg['gram_18'] * margin)
+        g14 = round(eg['gram_14'] * margin)
+
+        data = {
+            'gram_21_buy':  g21,
+            'gram_21_sell': round(g21 * 0.993),
+            'gram_24':      g24,
+            'gram_18':      g18,
+            'gram_14':      g14,
+            'dollar_bank':  usd_egp,
+            'dollar_sagha': usd_egp,
+            'gold_usd':     gold_usd,
+        }
+        _egypt_gold_cache = {'data': data, 'time': now_t}
+        log.info(f"✅ Egypt gold calculated: 21k={g21}, USD/EGP={usd_egp}")
+        return data
     except Exception as e:
-        log.warning(f"goldbullioneg scrape failed: {e}")
+        log.warning(f"Egypt gold calculation failed: {e}")
     return None
 
 
@@ -503,7 +481,7 @@ def fmt_egypt_gold_msg(gold_usd: float) -> str:
             "",
             f"🏅 الأوقية: *{ounce:,.0f} جنيه*",
             "",
-            "📡 المصدر: goldbullioneg.com",
+            "📡 محسوب من TwelveData (XAU/USD + USD/EGP)",
             f"🕐 {now_local().strftime('%H:%M:%S')} GMT+2",
         ]
     else:
