@@ -2362,11 +2362,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sl   = price - atr     if dire == "BULLISH" else price + atr
             icon = "🟢" if dire == "BULLISH" else "🔴" if dire == "BEARISH" else "🟡"
             text = (f"{icon} إشارة التداول\n\n"
-                    f"الاتجاه: *{dire}*\n"
-                    f"السعر: *{fmt_price(price)}*\n\n"
-                    f"TP1: `{tp1:.3f}`\n"
-                    f"TP2: `{tp2:.3f}`\n"
-                    f"SL:  `{sl:.3f}`\n\n"
+                    f"الاتجاه: {dire}\n"
+                    f"السعر: {fmt_price(price)}\n\n"
+                    f"TP1: {tp1:.3f}\n"
+                    f"TP2: {tp2:.3f}\n"
+                    f"SL:  {sl:.3f}\n\n"
                     f"BUY {bs}/12 · SELL {ss}/12")
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
