@@ -461,7 +461,7 @@ def fmt_egypt_gold_msg(gold_usd: float) -> str:
         d_sagha  = local.get('dollar_sagha')
 
         lines = [
-            "🇪🇬 *أسعار الذهب في مصر*",
+            "🇪🇬 أسعار الذهب في مصر",
             "🔴 مباشر من السوق",
             "",
             f"💵 الدولار البنوك: *{usd_egp:.2f} جنيه*",
@@ -488,7 +488,7 @@ def fmt_egypt_gold_msg(gold_usd: float) -> str:
         usd_egp = get_usd_egp() or 52.0
         eg = calc_egypt_gold(gold_usd, usd_egp)
         lines = [
-            "🇪🇬 *أسعار الذهب في مصر*",
+            "🇪🇬 أسعار الذهب في مصر",
             "⚠️ تقريبي",
             "",
             f"💵 الدولار: *{usd_egp:.2f} جنيه*",
@@ -2488,7 +2488,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             usd_egp = get_usd_egp() or 52.0
             eg = calc_egypt_gold(price, usd_egp)
             text = (
-                f"🇪🇬 *أسعار الذهب في مصر* ⚠️ تقريبي\n\n"
+                f"🇪🇬 أسعار الذهب في مصر - تقريبي\n\n"
                 f"💵 الدولار: *{usd_egp:.2f} جنيه*\n"
                 f"🥇 الذهب: *${price:,.2f}*\n\n"
                 f"🔸 عيار 21: *{eg['gram_21']:,.0f} جنيه*\n"
@@ -2870,7 +2870,7 @@ async def cmd_egypt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         usd_egp = get_usd_egp() or 52.0
         eg      = calc_egypt_gold(price, usd_egp)
         text    = (
-            f"🇪🇬 *أسعار الذهب في مصر* ⚠️ تقريبي\n\n"
+            f"🇪🇬 أسعار الذهب في مصر - تقريبي\n\n"
             f"💵 الدولار: *{usd_egp:.2f} جنيه*\n\n"
             f"🔸 عيار 21: *{eg['gram_21']:,.0f} جنيه*\n"
             f"🔸 عيار 18: *{eg['gram_18']:,.0f} جنيه*\n\n"
