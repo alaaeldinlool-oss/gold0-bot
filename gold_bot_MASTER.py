@@ -1707,61 +1707,49 @@ async def track_daily(context):
 
 
 def get_weekly_report(weeks_back: int = 0) -> Optional[dict]:
-    """جيب بيانات أسبوع معين - الاثنين للجمعة بس"""
+    """جيب بيانات أسبوع من TwelveData 1day مباشرة - الأدق"""
     from datetime import date as ddate
     db  = get_db()
     now = now_local()
 
-    # الاثنين للجمعة فقط
     days_since_monday = now.weekday()
     week_start = now - timedelta(days=days_since_monday + weeks_back * 7)
-    week_end   = week_start + timedelta(days=4)  # الجمعة فقط
+    week_end   = week_start + timedelta(days=4)
     ws = week_start.strftime('%Y-%m-%d')
     we = week_end.strftime('%Y-%m-%d')
 
     days = []
 
-    # MongoDB
-    if db is not None:
-        try:
-            days = list(db.daily.find({
-                'date':    {'$gte': ws, '$lte': we},
-                'weekday': {'$lte': 4}
-            }).sort('date', 1))
-        except Exception as e:
-            log.warning(f"MongoDB weekly fetch error: {e}")
+    # TwelveData 1day - الأدق
+    try:
+        d = fetch_ohlcv('1day', 14)
+        if d and d.get('close'):
+            for i in range(len(d['close'])):
+                date_str = d['time'][i][:10]
+                if ws <= date_str <= we:
+                    d_obj = ddate.fromisoformat(date_str)
+                    if d_obj.weekday() > 4:
+                        continue
+                    chg      = d['close'][i] - d['open'][i]
+                    chg_pct  = (chg / d['open'][i] * 100) if d['open'][i] else 0
+                    day_name = DAYS_AR.get(d_obj.weekday(), date_str)
+                    days.append({
+                        'date':       date_str,
+                        'day_name':   day_name,
+                        'weekday':    d_obj.weekday(),
+                        'open':       round(d['open'][i],  3),
+                        'close':      round(d['close'][i], 3),
+                        'high':       round(d['high'][i],  3),
+                        'low':        round(d['low'][i],   3),
+                        'change':     round(chg, 3),
+                        'change_pct': round(chg_pct, 3),
+                        'bullish':    chg >= 0,
+                        'range':      round(d['high'][i] - d['low'][i], 3),
+                    })
+    except Exception as e:
+        log.warning(f"TwelveData weekly error: {e}")
 
-    # TwelveData fallback
-    if not days:
-        try:
-            d = fetch_ohlcv('1day', 10)
-            if d and d.get('close'):
-                for i in range(len(d['close'])):
-                    date_str = d['time'][i][:10]
-                    if ws <= date_str <= we:
-                        d_obj = ddate.fromisoformat(date_str)
-                        if d_obj.weekday() > 4:
-                            continue
-                        chg      = d['close'][i] - d['open'][i]
-                        chg_pct  = (chg / d['open'][i] * 100) if d['open'][i] else 0
-                        day_name = DAYS_AR.get(d_obj.weekday(), date_str)
-                        days.append({
-                            'date':       date_str,
-                            'day_name':   day_name,
-                            'weekday':    d_obj.weekday(),
-                            'open':       round(d['open'][i],  3),
-                            'close':      round(d['close'][i], 3),
-                            'high':       round(d['high'][i],  3),
-                            'low':        round(d['low'][i],   3),
-                            'change':     round(chg, 3),
-                            'change_pct': round(chg_pct, 3),
-                            'bullish':    chg >= 0,
-                            'range':      round(d['high'][i] - d['low'][i], 3),
-                        })
-        except Exception as e:
-            log.error(f"TwelveData weekly fallback error: {e}")
-
-    # اليوم الحالي
+    # اليوم الحالي من 1h لو مش في 1day
     today_str  = now.strftime('%Y-%m-%d')
     today_obj  = ddate.fromisoformat(today_str)
     is_weekday = today_obj.weekday() <= 4
@@ -1771,38 +1759,48 @@ def get_weekly_report(weeks_back: int = 0) -> Optional[dict]:
         try:
             d_today = fetch_ohlcv('1h', 24)
             if d_today and d_today.get('close'):
-                open_t  = d_today['open'][0]
-                close_t = d_today['close'][-1]
-                high_t  = max(d_today['high'])
-                low_t   = min(d_today['low'])
-                chg     = close_t - open_t
-                chg_pct = (chg / open_t * 100) if open_t else 0
-                days.append({
-                    'date':       today_str,
-                    'day_name':   DAYS_AR.get(today_obj.weekday(), today_str) + ' (جاري)',
-                    'weekday':    today_obj.weekday(),
-                    'open':       round(open_t,  3),
-                    'close':      round(close_t, 3),
-                    'high':       round(high_t,  3),
-                    'low':        round(low_t,   3),
-                    'change':     round(chg, 3),
-                    'change_pct': round(chg_pct, 3),
-                    'bullish':    chg >= 0,
-                    'range':      round(high_t - low_t, 3),
-                })
-                days.sort(key=lambda x: x['date'])
+                today_candles = [i for i, t in enumerate(d_today['time']) if today_str in t]
+                if today_candles:
+                    open_t  = d_today['open'][today_candles[0]]
+                    close_t = d_today['close'][today_candles[-1]]
+                    high_t  = max(d_today['high'][i] for i in today_candles)
+                    low_t   = min(d_today['low'][i]  for i in today_candles)
+                    chg     = close_t - open_t
+                    chg_pct = (chg / open_t * 100) if open_t else 0
+                    days.append({
+                        'date':       today_str,
+                        'day_name':   DAYS_AR.get(today_obj.weekday(), today_str) + ' (جاري)',
+                        'weekday':    today_obj.weekday(),
+                        'open':       round(open_t,  3),
+                        'close':      round(close_t, 3),
+                        'high':       round(high_t,  3),
+                        'low':        round(low_t,   3),
+                        'change':     round(chg, 3),
+                        'change_pct': round(chg_pct, 3),
+                        'bullish':    chg >= 0,
+                        'range':      round(high_t - low_t, 3),
+                    })
+                    days.sort(key=lambda x: x['date'])
         except Exception as e:
             log.warning(f"today data error: {e}")
+
+    # Fallback: MongoDB
+    if not days and db is not None:
+        try:
+            days = list(db.daily.find({
+                'date': {'$gte': ws, '$lte': we}, 'weekday': {'$lte': 4}
+            }).sort('date', 1))
+        except Exception as e:
+            log.warning(f"MongoDB weekly error: {e}")
 
     if not days:
         return None
 
-    total_chg = sum(x['change'] for x in days)
-    bull_days = [x for x in days if x['bullish']]
-    bear_days = [x for x in days if not x['bullish']]
-    best_buy  = max(days, key=lambda x: x['change'])
-    best_sell = min(days, key=lambda x: x['change'])
-    # نستخدم open/close بس عشان High/Low في MongoDB ممكن تكون غلط
+    total_chg  = sum(x['change'] for x in days)
+    bull_days  = [x for x in days if x['bullish']]
+    bear_days  = [x for x in days if not x['bullish']]
+    best_buy   = max(days, key=lambda x: x['change'])
+    best_sell  = min(days, key=lambda x: x['change'])
     all_prices = [x['open'] for x in days] + [x['close'] for x in days]
     week_high  = max(all_prices)
     week_low   = min(all_prices)
@@ -1819,7 +1817,7 @@ def get_weekly_report(weeks_back: int = 0) -> Optional[dict]:
         'week_high':  week_high,
         'week_low':   week_low,
         'week_range': round(week_high - week_low, 2),
-        'source':     'live' if db is None else 'db',
+        'source':     'TwelveData',
     }
 
 
@@ -1869,38 +1867,53 @@ def fmt_weekly_msg(report: dict, prev: dict = None, label: str = "هذا الأ�
         bb = report['best_buy']
         bs = report['best_sell']
 
-        # أفضل يوم صاعد
         if bb['change'] >= 0:
-            bb_line = (f"🟢 أفضل يوم صاعد: {bb['day_name']}\n"
-                       f"   فتح {bb['open']:.2f} ← إغلاق {bb['close']:.2f} "
-                       f"(+{bb['change']:.2f}$)")
+            bb_lines = [
+                f"🟢 أفضل يوم صاعد: {bb['day_name']}",
+                f"   ↗ فتح {bb['open']:.2f} ← إغلاق {bb['close']:.2f} (+{bb['change']:.2f}$)",
+            ]
         else:
-            bb_line = (f"🟡 أقل يوم خسارة: {bb['day_name']}\n"
-                       f"   فتح {bb['open']:.2f} ← إغلاق {bb['close']:.2f} "
-                       f"({bb['change']:.2f}$)")
+            bb_lines = [
+                f"🟡 أقل يوم خسارة: {bb['day_name']}",
+                f"   ↘ فتح {bb['open']:.2f} ← إغلاق {bb['close']:.2f} ({bb['change']:.2f}$)",
+            ]
 
-        # أسوأ يوم هابط
         if bs['change'] < 0:
-            bs_line = (f"🔴 أسوأ يوم هابط: {bs['day_name']}\n"
-                       f"   فتح {bs['open']:.2f} ← إغلاق {bs['close']:.2f} "
-                       f"({bs['change']:.2f}$)")
+            bs_lines = [
+                f"🔴 أسوأ يوم هابط: {bs['day_name']}",
+                f"   ↘ فتح {bs['open']:.2f} ← إغلاق {bs['close']:.2f} ({bs['change']:.2f}$)",
+            ]
         else:
-            bs_line = (f"🟡 أقل يوم ربح: {bs['day_name']}\n"
-                       f"   فتح {bs['open']:.2f} ← إغلاق {bs['close']:.2f} "
-                       f"(+{bs['change']:.2f}$)")
+            bs_lines = [
+                f"🟡 أقل يوم ربح: {bs['day_name']}",
+                f"   ↗ فتح {bs['open']:.2f} ← إغلاق {bs['close']:.2f} (+{bs['change']:.2f}$)",
+            ]
 
-        lines += ["", bb_line, bs_line]
+        lines += ["", "─────────────────"] + bb_lines + [""] + bs_lines
 
     if prev and prev.get('total_chg') is not None:
-        diff   = report['total_chg'] - prev['total_chg']
-        sign   = '+' if diff >= 0 else ''
-        better = '📈 أفضل' if diff >= 0 else '📉 أضعف'
+        curr_chg = report['total_chg']
+        prev_chg = prev['total_chg']
+        diff     = curr_chg - prev_chg
+
+        curr_icon = '🟢' if curr_chg >= 0 else '🔴'
+        prev_icon = '🟢' if prev_chg >= 0 else '🔴'
+        curr_sign = '+' if curr_chg >= 0 else ''
+        prev_sign = '+' if prev_chg >= 0 else ''
+
+        if diff > 0:
+            diff_line = f"✅ الأسبوع الحالي أفضل بـ +{diff:.2f}$"
+        elif diff < 0:
+            diff_line = f"⚠️ الأسبوع الحالي أضعف بـ {diff:.2f}$"
+        else:
+            diff_line = "➡️ نفس الأداء"
+
         lines += [
             f"",
-            f"🔄 مقارنة بالأسبوع السابق:",
-            f"هذا الأسبوع: {'+' if report['total_chg']>=0 else ''}{report['total_chg']:.2f}$",
-            f"الأسبوع السابق: {'+' if prev['total_chg']>=0 else ''}{prev['total_chg']:.2f}$",
-            f"{better} بـ {sign}{diff:.2f}$",
+            f"📊 مقارنة الأسبوعين:",
+            f"  {curr_icon} هذا الأسبوع:   {curr_sign}{curr_chg:.2f}$",
+            f"  {prev_icon} الأسبوع الماضي: {prev_sign}{prev_chg:.2f}$",
+            f"  {diff_line}",
         ]
 
     lines += [
