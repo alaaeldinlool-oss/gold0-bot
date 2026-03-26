@@ -2096,7 +2096,117 @@ def detect_trendlines(highs: list, lows: list, n: int):
     return trendlines
 
 
-def generate_chart(d: dict, sig: dict, tf: str = '1H') -> Optional[bytes]:
+def generate_weekly_chart(report: dict) -> Optional[bytes]:
+    """ارسم شارت أسبوعي Candlestick للأيام"""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        import io
+
+        days = report['days']
+        if not days:
+            return None
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7),
+                                        gridspec_kw={'height_ratios': [3, 1]},
+                                        facecolor='#1a1a2e')
+        ax1.set_facecolor('#16213e')
+        ax2.set_facecolor('#16213e')
+
+        x = list(range(len(days)))
+        labels = [d['day_name'].replace(' (جاري)', ' ◉') for d in days]
+
+        # رسم الـ Candlesticks
+        for i, d in enumerate(days):
+            color  = '#00d4aa' if d['bullish'] else '#ff4757'
+            open_  = d['open']
+            close  = d['close']
+            high   = d['high']
+            low    = d['low']
+
+            # الذيل (High-Low)
+            ax1.plot([i, i], [low, high], color=color, linewidth=1.5, zorder=2)
+
+            # الجسم (Open-Close)
+            body_bot = min(open_, close)
+            body_top = max(open_, close)
+            rect = mpatches.FancyBboxPatch(
+                (i - 0.3, body_bot), 0.6, max(body_top - body_bot, 2),
+                boxstyle="square,pad=0",
+                facecolor=color, edgecolor=color, linewidth=1, zorder=3
+            )
+            ax1.add_patch(rect)
+
+            # سعر الإغلاق
+            ax1.annotate(f'{close:.0f}',
+                         xy=(i, close), xytext=(0, 8),
+                         textcoords='offset points',
+                         ha='center', va='bottom',
+                         color=color, fontsize=8, fontweight='bold')
+
+        # خط السعر
+        closes = [d['close'] for d in days]
+        opens  = [d['open']  for d in days]
+        ax1.plot(x, closes, color='#ffd700', linewidth=1, linestyle='--',
+                 alpha=0.5, zorder=1)
+
+        # إعدادات ax1
+        ax1.set_xlim(-0.7, len(days) - 0.3)
+        all_p = [d['high'] for d in days] + [d['low'] for d in days]
+        margin = (max(all_p) - min(all_p)) * 0.15
+        ax1.set_ylim(min(all_p) - margin, max(all_p) + margin)
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(labels, color='#e0e0e0', fontsize=9)
+        ax1.yaxis.set_tick_params(labelcolor='#aaaaaa', labelsize=8)
+        ax1.grid(axis='y', color='#2a2a4a', linewidth=0.5, alpha=0.7)
+        ax1.set_title(
+            f"📅 {report['week_start']} ← {report['week_end']}",
+            color='#ffd700', fontsize=11, fontweight='bold', pad=10
+        )
+
+        # شارت التغيير اليومي (بار)
+        changes = [d['change'] for d in days]
+        colors  = ['#00d4aa' if c >= 0 else '#ff4757' for c in changes]
+        ax2.bar(x, changes, color=colors, width=0.6, zorder=2)
+        ax2.axhline(0, color='#555577', linewidth=1)
+        for i, c in enumerate(changes):
+            sign = '+' if c >= 0 else ''
+            ax2.annotate(f'{sign}{c:.0f}',
+                         xy=(i, c), xytext=(0, 4 if c >= 0 else -12),
+                         textcoords='offset points',
+                         ha='center', color='#e0e0e0', fontsize=8)
+        ax2.set_xlim(-0.7, len(days) - 0.3)
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(labels, color='#e0e0e0', fontsize=9)
+        ax2.yaxis.set_tick_params(labelcolor='#aaaaaa', labelsize=8)
+        ax2.grid(axis='y', color='#2a2a4a', linewidth=0.5, alpha=0.7)
+        ax2.set_ylabel('التغيير $', color='#aaaaaa', fontsize=8)
+
+        # معلومات الملخص
+        total = report['total_chg']
+        sign  = '+' if total >= 0 else ''
+        color = '#00d4aa' if total >= 0 else '#ff4757'
+        fig.text(0.5, 0.01,
+                 f"الإجمالي: {sign}{total:.2f}$  |  "
+                 f"صاعد: {report['bull_days']}  هابط: {report['bear_days']}  |  "
+                 f"نطاق: {report['week_range']:.2f}$",
+                 ha='center', color=color, fontsize=9)
+
+        plt.tight_layout(rect=[0, 0.04, 1, 1])
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=130, bbox_inches='tight',
+                    facecolor='#1a1a2e')
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
+    except Exception as e:
+        log.error(f"generate_weekly_chart error: {e}")
+        return None
+
+
+
     """يرسم شارت كاندل مع EMA + Trendlines + دعم ومقاومة"""
     try:
         import matplotlib
@@ -2331,53 +2441,216 @@ async def check_and_send_alerts(context: ContextTypes.DEFAULT_TYPE):
                 except: pass
 
 async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
-    """Called twice daily — morning & evening."""
-    chat_ids = REPORT_CHAT_IDS + list(alert_subscribers)
-    if not chat_ids: return
+    """Dashboard صباحي شامل كل يوم 07:00 UTC"""
+    chat_ids = list(set(REPORT_CHAT_IDS + list(alert_subscribers)))
+    if not chat_ids:
+        return
 
-    d = fetch_ohlcv('1h', 200)
-    if not d: return
+    try:
+        d   = fetch_ohlcv('1h', 200)
+        if not d:
+            return
 
-    sig = full_analysis(d)
-    pv  = calc_pivots(max(d['high'][-5:]), min(d['low'][-5:]), d['close'][-1])
-    fib = calc_fibonacci(max(d['high'][-60:]), min(d['low'][-60:]))
-    ms  = market_structure(d)
-    hour = datetime.now().hour
-    period = '🌅 صباحي' if 5 <= hour < 12 else '🌇 مسائي'
+        sig    = full_analysis(d)
+        price  = sig['price']
+        pv     = calc_pivots(max(d['high'][-5:]), min(d['low'][-5:]), d['close'][-1])
+        fib    = calc_fibonacci(max(d['high'][-60:]), min(d['low'][-60:]))
+        gann   = calc_gann_square(price)
+        ms     = market_structure(d)
+        hour   = datetime.now(timezone.utc).hour
+        period = '🌅 صباحي' if 5 <= hour < 12 else '🌇 مسائي'
+        sess   = get_current_session()
 
-    report = [
-        f"╔══ 📰 تقرير الذهب {period} ══╗",
-        f"💰 السعر: *{fmt_price(sig['price'])}*",
-        f"📊 الاتجاه: *{fmt_direction(sig['direction'])}*",
-        f"🏗️ هيكل السوق: *{ms}*",
-        f"",
-        f"📈 المؤشرات:",
-        f"   RSI: {sig['RSI']:.1f}  |  MACD: {'↑' if sig['MACD']['bull'] else '↓'}  |  ST: {'🟢' if sig['st_bull'] else '🔴'}",
-        f"   Stoch RSI K: {sig['SRSI']['k']}",
-        f"",
-        f"📌 Pivot Points:",
-        f"   R1: {pv['R1']:.3f}  |  PP: {pv['PP']:.3f}  |  S1: {pv['S1']:.3f}",
-        f"",
-        f"🎯 *TP/SL (ATR={sig['ATR']:.2f}):*",
-    ]
+        # إشارة MTF
+        mtf_results = {}
+        for tf_key, tf_cfg in [('1m','1min'), ('5m','5min'), ('15m','15min'), ('1h','1h')]:
+            try:
+                d_tf = fetch_ohlcv(tf_cfg, 100)
+                if d_tf:
+                    s = full_analysis(d_tf)
+                    mtf_results[tf_key] = s['direction']
+            except:
+                pass
 
-    if sig['direction'] != 'NEUTRAL':
-        is_b = sig['direction'] == 'BULLISH'
-        p = sig['price']; a = sig['ATR']
-        report += [
-            f"   {'🟢 TP1' if is_b else '🔴 TP1'}: {fmt_price(p + a*1.5 if is_b else p - a*1.5)}",
-            f"   {'🟢 TP2' if is_b else '🔴 TP2'}: {fmt_price(p + a*3   if is_b else p - a*3)}",
-            f"   {'🔴 SL'  if is_b else '🟢 SL'}:  {fmt_price(p - a     if is_b else p + a)}",
+        bull_tf = sum(1 for v in mtf_results.values() if v == 'BULLISH')
+        bear_tf = sum(1 for v in mtf_results.values() if v == 'BEARISH')
+        if bull_tf >= 3:
+            mtf_signal = '🟢 صاعد قوي'
+        elif bear_tf >= 3:
+            mtf_signal = '🔴 هابط قوي'
+        elif bull_tf > bear_tf:
+            mtf_signal = '🟡 صاعد ضعيف'
+        elif bear_tf > bull_tf:
+            mtf_signal = '🟡 هابط ضعيف'
+        else:
+            mtf_signal = '⚪ محايد'
+
+        # أقرب Gann levels
+        g_res = gann['resistance'][0]['level'] if gann['resistance'] else price + 50
+        g_sup = gann['support'][0]['level']    if gann['support']    else price - 50
+
+        # أقرب Fibonacci
+        fib_levels = sorted([
+            (abs(v - price), k, v)
+            for k, v in fib.items()
+            if k not in ('H', 'L') and isinstance(v, float)
+        ])
+        fib_near = fib_levels[:2] if fib_levels else []
+
+        lines = [
+            f"╔══ 📰 Dashboard الذهب {period} ══╗",
+            f"",
+            f"💰 السعر: {fmt_price(price)}",
+            f"📊 الاتجاه: {fmt_direction(sig['direction'])}",
+            f"🏗 هيكل السوق: {ms}",
+            f"🕐 السيشن: {sess.get('name', 'غير معروف')}",
+            f"",
+            f"📡 MTF Signal: {mtf_signal}",
+            f"   " + "  ".join([f"{k}:{('🟢' if v=='BULLISH' else '🔴' if v=='BEARISH' else '⚪')}"
+                                  for k, v in mtf_results.items()]),
+            f"",
+            f"📈 المؤشرات:",
+            f"   RSI: {sig['RSI']:.1f}  {'⚠️ OB' if sig['RSI']>70 else '⚠️ OS' if sig['RSI']<30 else '✅'}",
+            f"   MACD: {'↑ صاعد' if sig['MACD']['bull'] else '↓ هابط'}",
+            f"   Supertrend: {'🟢 BUY' if sig['st_bull'] else '🔴 SELL'}",
+            f"   Stoch RSI: K={sig['SRSI']['k']}",
+            f"",
+            f"📌 مستويات اليوم:",
+            f"   🔴 R2: {pv['R2']:.2f}  R1: {pv['R1']:.2f}",
+            f"   ⬜ PP: {pv['PP']:.2f}",
+            f"   🟢 S1: {pv['S1']:.2f}  S2: {pv['S2']:.2f}",
+            f"",
+            f"⬜ Gann Square:",
+            f"   ▲ مقاومة: {g_res:.2f}  (+{g_res-price:.2f}$)",
+            f"   ▼ دعم:    {g_sup:.2f}  (-{price-g_sup:.2f}$)",
         ]
 
-    report += ["", f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')}", "╚══════════════════╝"]
-    text = '\n'.join(report)
+        if fib_near:
+            lines.append(f"")
+            lines.append(f"🌀 Fibonacci أقرب مستويات:")
+            for _, k, v in fib_near:
+                arrow = "▲" if v > price else "▼"
+                lines.append(f"   {arrow} {k}: {v:.2f}")
 
-    for cid in set(chat_ids):
+        if sig['direction'] != 'NEUTRAL':
+            is_b = sig['direction'] == 'BULLISH'
+            p, a = price, sig['ATR']
+            lines += [
+                f"",
+                f"🎯 TP/SL المقترح:",
+                f"   {'🟢' if is_b else '🔴'} TP1: {fmt_price(p + a*1.5 if is_b else p - a*1.5)}",
+                f"   {'🟢' if is_b else '🔴'} TP2: {fmt_price(p + a*3   if is_b else p - a*3)}",
+                f"   {'🔴' if is_b else '🟢'} SL:  {fmt_price(p - a     if is_b else p + a)}",
+            ]
+
+        lines += [
+            f"",
+            f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2",
+            f"╚════════════════════════╝"
+        ]
+
+        text = '\n'.join(lines)
+        for cid in chat_ids:
+            try:
+                await context.bot.send_message(
+                    cid, text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=main_keyboard()
+                )
+            except Exception as e:
+                log.warning(f"Dashboard send error {cid}: {e}")
+
+    except Exception as e:
+        log.error(f"send_daily_report error: {e}")
+
+
+def get_smart_signal(d1m, d5m, d15m, d1h) -> dict:
+    """إشارة ذكية من تقاطع 4 timeframes"""
+    results = {}
+    scores  = {'BULLISH': 0, 'BEARISH': 0}
+    weights = {'1m': 1, '5m': 2, '15m': 3, '1h': 4}
+
+    for name, d in [('1m', d1m), ('5m', d5m), ('15m', d15m), ('1h', d1h)]:
+        if not d:
+            continue
         try:
-            await context.bot.send_message(cid, text, parse_mode=ParseMode.HTML)
-        except Exception as e:
-            log.warning(f"Report send error: {e}")
+            s = full_analysis(d)
+            results[name] = s
+            w = weights[name]
+            if s['direction'] == 'BULLISH':
+                scores['BULLISH'] += w
+            elif s['direction'] == 'BEARISH':
+                scores['BEARISH'] += w
+        except:
+            pass
+
+    total = scores['BULLISH'] + scores['BEARISH']
+    if total == 0:
+        return {'direction': 'NEUTRAL', 'confidence': 0, 'details': results}
+
+    if scores['BULLISH'] > scores['BEARISH']:
+        direction  = 'BULLISH'
+        confidence = round(scores['BULLISH'] / total * 100)
+    elif scores['BEARISH'] > scores['BULLISH']:
+        direction  = 'BEARISH'
+        confidence = round(scores['BEARISH'] / total * 100)
+    else:
+        direction  = 'NEUTRAL'
+        confidence = 50
+
+    return {
+        'direction':  direction,
+        'confidence': confidence,
+        'bull_score': scores['BULLISH'],
+        'bear_score': scores['BEARISH'],
+        'details':    results,
+    }
+
+
+def get_backtest_stats() -> dict:
+    """احسب دقة الإشارات السابقة من MongoDB"""
+    db = get_db()
+    if db is None:
+        return {}
+    try:
+        signals = list(db.signals.find({'result': {'$ne': 'pending'}}).sort('time', -1).limit(50))
+        if not signals:
+            return {}
+
+        total  = len(signals)
+        wins   = [s for s in signals if s['result'] in ('tp1', 'tp2')]
+        losses = [s for s in signals if s['result'] == 'sl']
+        tp2    = [s for s in signals if s['result'] == 'tp2']
+        pnl    = sum(s['pnl'] for s in signals)
+
+        # أفضل وأسوأ إشارة
+        best  = max(signals, key=lambda x: x['pnl'])
+        worst = min(signals, key=lambda x: x['pnl'])
+
+        # آخر 10
+        streak = 0
+        for s in signals[:10]:
+            if s['result'] in ('tp1', 'tp2'):
+                streak += 1
+            else:
+                break
+
+        return {
+            'total':    total,
+            'wins':     len(wins),
+            'losses':   len(losses),
+            'tp2':      len(tp2),
+            'accuracy': round(len(wins) / total * 100, 1),
+            'pnl':      round(pnl, 2),
+            'best':     round(best['pnl'], 2),
+            'worst':    round(worst['pnl'], 2),
+            'streak':   streak,
+        }
+    except Exception as e:
+        log.warning(f"backtest error: {e}")
+        return {}
+
+
 
 # ════════════════════════════════════════════════════════════════
 #  COMMAND HANDLERS
@@ -2400,6 +2673,10 @@ def main_keyboard():
             InlineKeyboardButton("🎯 إشارة",       callback_data="trade"),
             InlineKeyboardButton("⏱ MTF",          callback_data="mtf"),
             InlineKeyboardButton("📈 تقرير",        callback_data="report"),
+        ],
+        [
+            InlineKeyboardButton("🧠 إشارة ذكية",  callback_data="smart_signal"),
+            InlineKeyboardButton("📊 باك تيست",    callback_data="backtest"),
         ],
         [
             InlineKeyboardButton("📌 Pivots",       callback_data="pivots"),
@@ -2635,6 +2912,89 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
+    elif data == "smart_signal":
+        await query.message.reply_text("⏳ جاري تحليل 4 timeframes...",
+                                       reply_markup=main_keyboard())
+        try:
+            d1m  = fetch_ohlcv('1min',  100)
+            d5m  = fetch_ohlcv('5min',  100)
+            d15m = fetch_ohlcv('15min', 100)
+            d1h  = fetch_ohlcv('1h',    100)
+            sig  = get_smart_signal(d1m, d5m, d15m, d1h)
+            price = (d1h or d5m or d1m or {}).get('close', [0])[-1] if (d1h or d5m or d1m) else 0
+
+            icon = '🟢' if sig['direction'] == 'BULLISH' else '🔴' if sig['direction'] == 'BEARISH' else '⚪'
+            conf = sig['confidence']
+            conf_bar = '█' * (conf // 10) + '░' * (10 - conf // 10)
+
+            lines = [
+                f"🧠 الإشارة الذكية - 4 Timeframes",
+                f"",
+                f"{icon} الاتجاه: {sig['direction']}",
+                f"💪 الثقة: {conf}%  [{conf_bar}]",
+                f"",
+                f"التفاصيل:",
+            ]
+            details = sig.get('details', {})
+            tf_names = {'1m': '1 دقيقة', '5m': '5 دقائق', '15m': '15 دقيقة', '1h': 'ساعة'}
+            for tf, s in details.items():
+                d_icon = '🟢' if s['direction']=='BULLISH' else '🔴' if s['direction']=='BEARISH' else '⚪'
+                lines.append(f"   {d_icon} {tf_names.get(tf,tf)}: {s['direction']}")
+                lines.append(f"      RSI:{s['RSI']:.0f} | ST:{'🟢' if s['st_bull'] else '🔴'} | MACD:{'↑' if s['MACD']['bull'] else '↓'}")
+
+            if sig['direction'] != 'NEUTRAL' and price:
+                atr = details.get('1h', details.get('15m', {})).get('ATR', 20)
+                is_b = sig['direction'] == 'BULLISH'
+                lines += [
+                    f"",
+                    f"🎯 TP/SL:",
+                    f"   {'🟢' if is_b else '🔴'} TP1: {price + atr*1.5 if is_b else price - atr*1.5:.2f}",
+                    f"   {'🟢' if is_b else '🔴'} TP2: {price + atr*3   if is_b else price - atr*3:.2f}",
+                    f"   {'🔴' if is_b else '🟢'} SL:  {price - atr     if is_b else price + atr:.2f}",
+                ]
+            text = '\n'.join(lines)
+        except Exception as e:
+            text = f"❌ خطأ: {str(e)[:100]}"
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                       reply_markup=main_keyboard())
+
+    elif data == "backtest":
+        await query.message.reply_text("⏳ جاري حساب الباك تيست...",
+                                       reply_markup=main_keyboard())
+        try:
+            stats = get_backtest_stats()
+            if not stats:
+                text = ("📊 لا توجد إشارات مكتملة بعد.\n\n"
+                        "يتم حفظ الإشارات تلقائياً عند الضغط على زر الإشارة.\n"
+                        "انتظر حتى تصل الأسعار لـ TP أو SL.")
+            else:
+                acc_icon = '🟢' if stats['accuracy'] >= 60 else '🟡' if stats['accuracy'] >= 45 else '🔴'
+                pnl_icon = '📈' if stats['pnl'] >= 0 else '📉'
+                acc_bar  = '█' * int(stats['accuracy'] / 10) + '░' * (10 - int(stats['accuracy'] / 10))
+
+                lines = [
+                    f"📊 باك تيست آخر {stats['total']} إشارة",
+                    f"",
+                    f"{acc_icon} الدقة: {stats['accuracy']}%  [{acc_bar}]",
+                    f"",
+                    f"✅ ناجحة:  {stats['wins']}  (TP2: {stats['tp2']})",
+                    f"❌ خاسرة:  {stats['losses']}",
+                    f"",
+                    f"{pnl_icon} إجمالي الربح/خسارة: {'+' if stats['pnl']>=0 else ''}{stats['pnl']:.2f}$",
+                    f"",
+                    f"🏆 أفضل إشارة: +{stats['best']:.2f}$",
+                    f"💔 أسوأ إشارة: {stats['worst']:.2f}$",
+                    f"",
+                    f"🔥 سلسلة نجاحات حالية: {stats['streak']}",
+                    f"",
+                    f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2",
+                ]
+                text = '\n'.join(lines)
+        except Exception as e:
+            text = f"❌ خطأ: {str(e)[:100]}"
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                       reply_markup=main_keyboard())
+
     elif data == "gann_square":
         await query.message.reply_text("⏳ جاري حساب Gann Square...",
                                        reply_markup=main_keyboard())
@@ -2860,12 +3220,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text = ("📊 لا توجد بيانات كافية بعد.\n"
                         "البوت يحتاج يشتغل لجمع البيانات.\n\n"
                         "💡 البيانات بتتجمع تلقائياً كل يوم!")
+                await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                               reply_markup=main_keyboard())
             else:
                 text = fmt_weekly_msg(report, prev)
+                # ابعت الشارت أولاً
+                loop = asyncio.get_event_loop()
+                img  = await loop.run_in_executor(None, generate_weekly_chart, report)
+                if img:
+                    await query.message.reply_photo(
+                        photo=img,
+                        caption=f"📊 شارت الأسبوع: {report['week_start']} ← {report['week_end']}",
+                        reply_markup=main_keyboard()
+                    )
+                # ثم التقرير النصي
+                await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                               reply_markup=main_keyboard())
         except Exception as e:
-            text = f"❌ خطأ في التقرير: {str(e)[:150]}"
-        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
-                                       reply_markup=main_keyboard())
+            await query.message.reply_text(f"❌ خطأ في التقرير: {str(e)[:150]}",
+                                           reply_markup=main_keyboard())
 
     elif data == "egypt":
         await query.message.reply_text("⏳ جاري جلب أسعار الذهب المصري...",
