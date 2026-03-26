@@ -2096,7 +2096,117 @@ def detect_trendlines(highs: list, lows: list, n: int):
     return trendlines
 
 
-def generate_chart(d: dict, sig: dict, tf: str = '1H') -> Optional[bytes]:
+def generate_weekly_chart(report: dict) -> Optional[bytes]:
+    """ارسم شارت أسبوعي Candlestick للأيام"""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        import io
+
+        days = report['days']
+        if not days:
+            return None
+
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7),
+                                        gridspec_kw={'height_ratios': [3, 1]},
+                                        facecolor='#1a1a2e')
+        ax1.set_facecolor('#16213e')
+        ax2.set_facecolor('#16213e')
+
+        x = list(range(len(days)))
+        labels = [d['day_name'].replace(' (جاري)', ' ◉') for d in days]
+
+        # رسم الـ Candlesticks
+        for i, d in enumerate(days):
+            color  = '#00d4aa' if d['bullish'] else '#ff4757'
+            open_  = d['open']
+            close  = d['close']
+            high   = d['high']
+            low    = d['low']
+
+            # الذيل (High-Low)
+            ax1.plot([i, i], [low, high], color=color, linewidth=1.5, zorder=2)
+
+            # الجسم (Open-Close)
+            body_bot = min(open_, close)
+            body_top = max(open_, close)
+            rect = mpatches.FancyBboxPatch(
+                (i - 0.3, body_bot), 0.6, max(body_top - body_bot, 2),
+                boxstyle="square,pad=0",
+                facecolor=color, edgecolor=color, linewidth=1, zorder=3
+            )
+            ax1.add_patch(rect)
+
+            # سعر الإغلاق
+            ax1.annotate(f'{close:.0f}',
+                         xy=(i, close), xytext=(0, 8),
+                         textcoords='offset points',
+                         ha='center', va='bottom',
+                         color=color, fontsize=8, fontweight='bold')
+
+        # خط السعر
+        closes = [d['close'] for d in days]
+        opens  = [d['open']  for d in days]
+        ax1.plot(x, closes, color='#ffd700', linewidth=1, linestyle='--',
+                 alpha=0.5, zorder=1)
+
+        # إعدادات ax1
+        ax1.set_xlim(-0.7, len(days) - 0.3)
+        all_p = [d['high'] for d in days] + [d['low'] for d in days]
+        margin = (max(all_p) - min(all_p)) * 0.15
+        ax1.set_ylim(min(all_p) - margin, max(all_p) + margin)
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(labels, color='#e0e0e0', fontsize=9)
+        ax1.yaxis.set_tick_params(labelcolor='#aaaaaa', labelsize=8)
+        ax1.grid(axis='y', color='#2a2a4a', linewidth=0.5, alpha=0.7)
+        ax1.set_title(
+            f"📅 {report['week_start']} ← {report['week_end']}",
+            color='#ffd700', fontsize=11, fontweight='bold', pad=10
+        )
+
+        # شارت التغيير اليومي (بار)
+        changes = [d['change'] for d in days]
+        colors  = ['#00d4aa' if c >= 0 else '#ff4757' for c in changes]
+        ax2.bar(x, changes, color=colors, width=0.6, zorder=2)
+        ax2.axhline(0, color='#555577', linewidth=1)
+        for i, c in enumerate(changes):
+            sign = '+' if c >= 0 else ''
+            ax2.annotate(f'{sign}{c:.0f}',
+                         xy=(i, c), xytext=(0, 4 if c >= 0 else -12),
+                         textcoords='offset points',
+                         ha='center', color='#e0e0e0', fontsize=8)
+        ax2.set_xlim(-0.7, len(days) - 0.3)
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(labels, color='#e0e0e0', fontsize=9)
+        ax2.yaxis.set_tick_params(labelcolor='#aaaaaa', labelsize=8)
+        ax2.grid(axis='y', color='#2a2a4a', linewidth=0.5, alpha=0.7)
+        ax2.set_ylabel('التغيير $', color='#aaaaaa', fontsize=8)
+
+        # معلومات الملخص
+        total = report['total_chg']
+        sign  = '+' if total >= 0 else ''
+        color = '#00d4aa' if total >= 0 else '#ff4757'
+        fig.text(0.5, 0.01,
+                 f"الإجمالي: {sign}{total:.2f}$  |  "
+                 f"صاعد: {report['bull_days']}  هابط: {report['bear_days']}  |  "
+                 f"نطاق: {report['week_range']:.2f}$",
+                 ha='center', color=color, fontsize=9)
+
+        plt.tight_layout(rect=[0, 0.04, 1, 1])
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=130, bbox_inches='tight',
+                    facecolor='#1a1a2e')
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
+    except Exception as e:
+        log.error(f"generate_weekly_chart error: {e}")
+        return None
+
+
+
     """يرسم شارت كاندل مع EMA + Trendlines + دعم ومقاومة"""
     try:
         import matplotlib
@@ -2860,12 +2970,25 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text = ("📊 لا توجد بيانات كافية بعد.\n"
                         "البوت يحتاج يشتغل لجمع البيانات.\n\n"
                         "💡 البيانات بتتجمع تلقائياً كل يوم!")
+                await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                               reply_markup=main_keyboard())
             else:
                 text = fmt_weekly_msg(report, prev)
+                # ابعت الشارت أولاً
+                loop = asyncio.get_event_loop()
+                img  = await loop.run_in_executor(None, generate_weekly_chart, report)
+                if img:
+                    await query.message.reply_photo(
+                        photo=img,
+                        caption=f"📊 شارت الأسبوع: {report['week_start']} ← {report['week_end']}",
+                        reply_markup=main_keyboard()
+                    )
+                # ثم التقرير النصي
+                await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                               reply_markup=main_keyboard())
         except Exception as e:
-            text = f"❌ خطأ في التقرير: {str(e)[:150]}"
-        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
-                                       reply_markup=main_keyboard())
+            await query.message.reply_text(f"❌ خطأ في التقرير: {str(e)[:150]}",
+                                           reply_markup=main_keyboard())
 
     elif data == "egypt":
         await query.message.reply_text("⏳ جاري جلب أسعار الذهب المصري...",
