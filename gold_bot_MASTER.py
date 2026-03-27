@@ -801,6 +801,275 @@ def calc_fibonacci(H: float, L: float) -> dict:
 #  GANN ANALYSIS
 # ════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════
+#  PATTERN RECOGNITION — نماذج سعرية + شموع يابانية
+# ════════════════════════════════════════════════════════════════
+
+def detect_candlestick_patterns(o: list, h: list, l: list, c: list) -> list:
+    """كشف نماذج الشموع اليابانية"""
+    patterns = []
+    if len(c) < 3:
+        return patterns
+
+    # آخر 3 شموع
+    o1, o2, o3 = o[-3], o[-2], o[-1]
+    h1, h2, h3 = h[-3], h[-2], h[-1]
+    l1, l2, l3 = l[-3], l[-2], l[-1]
+    c1, c2, c3 = c[-3], c[-2], c[-1]
+
+    body1 = abs(c1 - o1)
+    body2 = abs(c2 - o2)
+    body3 = abs(c3 - o3)
+    avg_body = (body1 + body2 + body3) / 3
+
+    # ── نماذج الشمعة الواحدة ──
+
+    # Doji
+    if body3 < avg_body * 0.1 and (h3 - l3) > body3 * 3:
+        patterns.append({'name': 'Doji', 'signal': 'NEUTRAL',
+                          'desc': 'تردد — انتظر تأكيد الاتجاه', 'strength': 2})
+
+    # Hammer
+    lower_wick3 = min(o3, c3) - l3
+    upper_wick3 = h3 - max(o3, c3)
+    if lower_wick3 > body3 * 2 and upper_wick3 < body3 * 0.3 and c2 < o2:
+        patterns.append({'name': 'Hammer', 'signal': 'BULLISH',
+                          'desc': 'مطرقة — انعكاس صاعد محتمل', 'strength': 3})
+
+    # Shooting Star
+    if upper_wick3 > body3 * 2 and lower_wick3 < body3 * 0.3 and c2 > o2:
+        patterns.append({'name': 'Shooting Star', 'signal': 'BEARISH',
+                          'desc': 'نجمة هابطة — انعكاس هابط محتمل', 'strength': 3})
+
+    # Bullish Marubozu
+    if c3 > o3 and body3 > avg_body * 1.5 and lower_wick3 < body3 * 0.05 and upper_wick3 < body3 * 0.05:
+        patterns.append({'name': 'Bullish Marubozu', 'signal': 'BULLISH',
+                          'desc': 'شمعة صاعدة قوية بدون ذيول', 'strength': 4})
+
+    # Bearish Marubozu
+    if c3 < o3 and body3 > avg_body * 1.5 and lower_wick3 < body3 * 0.05 and upper_wick3 < body3 * 0.05:
+        patterns.append({'name': 'Bearish Marubozu', 'signal': 'BEARISH',
+                          'desc': 'شمعة هابطة قوية بدون ذيول', 'strength': 4})
+
+    # ── نماذج شمعتين ──
+
+    # Bullish Engulfing
+    if c2 < o2 and c3 > o3 and o3 <= c2 and c3 >= o2 and body3 > body2:
+        patterns.append({'name': 'Bullish Engulfing', 'signal': 'BULLISH',
+                          'desc': 'ابتلاع صاعد — قوة شرائية قوية', 'strength': 4})
+
+    # Bearish Engulfing
+    if c2 > o2 and c3 < o3 and o3 >= c2 and c3 <= o2 and body3 > body2:
+        patterns.append({'name': 'Bearish Engulfing', 'signal': 'BEARISH',
+                          'desc': 'ابتلاع هابط — قوة بيعية قوية', 'strength': 4})
+
+    # Tweezer Bottom
+    if c2 < o2 and c3 > o3 and abs(l2 - l3) < avg_body * 0.1:
+        patterns.append({'name': 'Tweezer Bottom', 'signal': 'BULLISH',
+                          'desc': 'قاع مزدوج — دعم قوي', 'strength': 3})
+
+    # Tweezer Top
+    if c2 > o2 and c3 < o3 and abs(h2 - h3) < avg_body * 0.1:
+        patterns.append({'name': 'Tweezer Top', 'signal': 'BEARISH',
+                          'desc': 'قمة مزدوجة — مقاومة قوية', 'strength': 3})
+
+    # ── نماذج 3 شموع ──
+
+    # Morning Star
+    if (c1 < o1 and body1 > avg_body and
+        body2 < avg_body * 0.3 and
+        c3 > o3 and c3 > (o1 + c1) / 2):
+        patterns.append({'name': 'Morning Star', 'signal': 'BULLISH',
+                          'desc': 'نجمة الصباح — انعكاس صاعد قوي', 'strength': 5})
+
+    # Evening Star
+    if (c1 > o1 and body1 > avg_body and
+        body2 < avg_body * 0.3 and
+        c3 < o3 and c3 < (o1 + c1) / 2):
+        patterns.append({'name': 'Evening Star', 'signal': 'BEARISH',
+                          'desc': 'نجمة المساء — انعكاس هابط قوي', 'strength': 5})
+
+    # Three White Soldiers
+    if (c1 > o1 and c2 > o2 and c3 > o3 and
+        c2 > c1 and c3 > c2 and
+        body1 > avg_body and body2 > avg_body and body3 > avg_body):
+        patterns.append({'name': 'Three White Soldiers', 'signal': 'BULLISH',
+                          'desc': '3 جنود بيض — استمرار صاعد قوي', 'strength': 5})
+
+    # Three Black Crows
+    if (c1 < o1 and c2 < o2 and c3 < o3 and
+        c2 < c1 and c3 < c2 and
+        body1 > avg_body and body2 > avg_body and body3 > avg_body):
+        patterns.append({'name': 'Three Black Crows', 'signal': 'BEARISH',
+                          'desc': '3 غربان سود — استمرار هابط قوي', 'strength': 5})
+
+    return patterns
+
+
+def detect_chart_patterns(h: list, l: list, c: list, lookback: int = 50) -> list:
+    """كشف النماذج السعرية (رأس وكتفين، مثلث، إلخ)"""
+    patterns = []
+    if len(c) < lookback:
+        lookback = len(c)
+
+    h_r = h[-lookback:]
+    l_r = l[-lookback:]
+    c_r = c[-lookback:]
+    n   = len(c_r)
+
+    # إيجاد القمم والقيعان المحلية
+    def find_peaks(data, min_dist=5):
+        peaks = []
+        for i in range(min_dist, len(data) - min_dist):
+            if data[i] == max(data[i-min_dist:i+min_dist+1]):
+                peaks.append((i, data[i]))
+        return peaks
+
+    def find_troughs(data, min_dist=5):
+        troughs = []
+        for i in range(min_dist, len(data) - min_dist):
+            if data[i] == min(data[i-min_dist:i+min_dist+1]):
+                troughs.append((i, data[i]))
+        return troughs
+
+    peaks   = find_peaks(h_r)
+    troughs = find_troughs(l_r)
+
+    # ── Head & Shoulders ──
+    if len(peaks) >= 3:
+        for i in range(len(peaks) - 2):
+            lsh, head, rsh = peaks[i], peaks[i+1], peaks[i+2]
+            if (head[1] > lsh[1] * 1.005 and
+                head[1] > rsh[1] * 1.005 and
+                abs(lsh[1] - rsh[1]) / head[1] < 0.02):
+                # neckline
+                neck = min(l_r[lsh[0]:head[0]+1] + l_r[head[0]:rsh[0]+1])
+                completion = (c_r[-1] - neck) / neck * 100
+                status = 'مكتمل' if c_r[-1] < neck else f'جاري ({abs(completion):.1f}% للاختراق)'
+                patterns.append({
+                    'name':   'Head & Shoulders',
+                    'signal': 'BEARISH',
+                    'desc':   f'رأس وكتفين هابط — {status}',
+                    'target': neck - (head[1] - neck),
+                    'neck':   round(neck, 2),
+                    'strength': 5,
+                    'status': status,
+                })
+
+    # ── Inverse Head & Shoulders ──
+    if len(troughs) >= 3:
+        for i in range(len(troughs) - 2):
+            lsh, head, rsh = troughs[i], troughs[i+1], troughs[i+2]
+            if (head[1] < lsh[1] * 0.995 and
+                head[1] < rsh[1] * 0.995 and
+                abs(lsh[1] - rsh[1]) / head[1] < 0.02):
+                neck = max(h_r[lsh[0]:head[0]+1] + h_r[head[0]:rsh[0]+1])
+                completion = (neck - c_r[-1]) / neck * 100
+                status = 'مكتمل' if c_r[-1] > neck else f'جاري ({abs(completion):.1f}% للاختراق)'
+                patterns.append({
+                    'name':   'Inverse Head & Shoulders',
+                    'signal': 'BULLISH',
+                    'desc':   f'رأس وكتفين صاعد — {status}',
+                    'target': neck + (neck - head[1]),
+                    'neck':   round(neck, 2),
+                    'strength': 5,
+                    'status': status,
+                })
+
+    # ── Double Top ──
+    if len(peaks) >= 2:
+        p1, p2 = peaks[-2], peaks[-1]
+        if abs(p1[1] - p2[1]) / p1[1] < 0.015 and p2[0] - p1[0] > 5:
+            trough_between = min(l_r[p1[0]:p2[0]+1])
+            status = 'مكتمل' if c_r[-1] < trough_between else 'في التكوين'
+            patterns.append({
+                'name':   'Double Top',
+                'signal': 'BEARISH',
+                'desc':   f'قمة مزدوجة — {status}',
+                'target': trough_between - (p1[1] - trough_between),
+                'neck':   round(trough_between, 2),
+                'strength': 4,
+                'status': status,
+            })
+
+    # ── Double Bottom ──
+    if len(troughs) >= 2:
+        t1, t2 = troughs[-2], troughs[-1]
+        if abs(t1[1] - t2[1]) / t1[1] < 0.015 and t2[0] - t1[0] > 5:
+            peak_between = max(h_r[t1[0]:t2[0]+1])
+            status = 'مكتمل' if c_r[-1] > peak_between else 'في التكوين'
+            patterns.append({
+                'name':   'Double Bottom',
+                'signal': 'BULLISH',
+                'desc':   f'قاع مزدوج — {status}',
+                'target': peak_between + (peak_between - t1[1]),
+                'neck':   round(peak_between, 2),
+                'strength': 4,
+                'status': status,
+            })
+
+    # ── Ascending Triangle ──
+    if len(peaks) >= 2 and len(troughs) >= 2:
+        resist = [p[1] for p in peaks[-3:]]
+        supprt = [t[1] for t in troughs[-3:]]
+        if max(resist) - min(resist) < max(resist) * 0.01:  # مقاومة أفقية
+            if supprt[-1] > supprt[0]:  # دعم صاعد
+                patterns.append({
+                    'name':   'Ascending Triangle',
+                    'signal': 'BULLISH',
+                    'desc':   'مثلث صاعد — اختراق للأعلى متوقع',
+                    'target': max(resist) + (max(resist) - min(supprt)),
+                    'strength': 4,
+                    'status': 'في التكوين',
+                })
+
+    # ── Descending Triangle ──
+    if len(peaks) >= 2 and len(troughs) >= 2:
+        resist = [p[1] for p in peaks[-3:]]
+        supprt = [t[1] for t in troughs[-3:]]
+        if max(supprt) - min(supprt) < max(supprt) * 0.01:  # دعم أفقي
+            if resist[-1] < resist[0]:  # مقاومة هابطة
+                patterns.append({
+                    'name':   'Descending Triangle',
+                    'signal': 'BEARISH',
+                    'desc':   'مثلث هابط — اختراق للأسفل متوقع',
+                    'target': min(supprt) - (max(resist) - min(supprt)),
+                    'strength': 4,
+                    'status': 'في التكوين',
+                })
+
+    return patterns
+
+
+def analyze_patterns_mtf() -> dict:
+    """تحليل النماذج على كل التايم فريمز"""
+    results = {}
+    timeframes = [
+        ('1m',  '1min',  50,  '1 دقيقة'),
+        ('5m',  '5min',  50,  '5 دقائق'),
+        ('15m', '15min', 50,  '15 دقيقة'),
+        ('1h',  '1h',    100, 'ساعة'),
+        ('4h',  '4h',    100, '4 ساعات'),
+    ]
+    for key, interval, size, label in timeframes:
+        try:
+            d = fetch_ohlcv(interval, size)
+            if not d or len(d['close']) < 10:
+                continue
+            candle_pats = detect_candlestick_patterns(d['open'], d['high'], d['low'], d['close'])
+            chart_pats  = detect_chart_patterns(d['high'], d['low'], d['close'])
+            if candle_pats or chart_pats:
+                results[key] = {
+                    'label':   label,
+                    'candles': candle_pats,
+                    'charts':  chart_pats,
+                    'price':   d['close'][-1],
+                }
+        except Exception as e:
+            log.warning(f"Pattern MTF {key} error: {e}")
+    return results
+
+
 def calc_gann_square(price: float) -> dict:
     """Gann Square of Nine — مستويات دعم ومقاومة"""
     import math
@@ -2097,7 +2366,7 @@ def detect_trendlines(highs: list, lows: list, n: int):
 
 
 def generate_weekly_chart(report: dict) -> Optional[bytes]:
-    """ارسم شارت أسبوعي Candlestick للأيام"""
+    """Weekly Candlestick chart"""
     try:
         import matplotlib
         matplotlib.use('Agg')
@@ -2109,459 +2378,112 @@ def generate_weekly_chart(report: dict) -> Optional[bytes]:
         if not days:
             return None
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7),
-                                        gridspec_kw={'height_ratios': [3, 1]},
-                                        facecolor='#1a1a2e')
+        DAY_EN = {
+            'الاثنين': 'Mon', 'الثلاثاء': 'Tue', 'الاربعاء': 'Wed',
+            'الأربعاء': 'Wed', 'الخميس': 'Thu', 'الجمعة': 'Fri',
+        }
+        def day_label(d):
+            name = d['day_name']
+            for ar, en in DAY_EN.items():
+                name = name.replace(ar, en)
+            name = name.replace(' (جاري)', '*').replace('(جاري)', '*')
+            return name
+
+        fig, (ax1, ax2) = plt.subplots(
+            2, 1, figsize=(10, 7),
+            gridspec_kw={'height_ratios': [3, 1]},
+            facecolor='#1a1a2e'
+        )
         ax1.set_facecolor('#16213e')
         ax2.set_facecolor('#16213e')
 
-        x = list(range(len(days)))
-        labels = [d['day_name'].replace(' (جاري)', ' ◉') for d in days]
+        x      = list(range(len(days)))
+        labels = [day_label(d) for d in days]
 
-        # رسم الـ Candlesticks
         for i, d in enumerate(days):
-            color  = '#00d4aa' if d['bullish'] else '#ff4757'
-            open_  = d['open']
-            close  = d['close']
-            high   = d['high']
-            low    = d['low']
-
-            # الذيل (High-Low)
-            ax1.plot([i, i], [low, high], color=color, linewidth=1.5, zorder=2)
-
-            # الجسم (Open-Close)
+            color    = '#00d4aa' if d['bullish'] else '#ff4757'
+            open_    = d['open']
+            close    = d['close']
+            high     = d['high']
+            low      = d['low']
             body_bot = min(open_, close)
             body_top = max(open_, close)
+
+            ax1.plot([i, i], [low, high], color=color, linewidth=1.5, zorder=2)
             rect = mpatches.FancyBboxPatch(
-                (i - 0.3, body_bot), 0.6, max(body_top - body_bot, 2),
-                boxstyle="square,pad=0",
+                (i - 0.3, body_bot), 0.6, max(body_top - body_bot, 1.5),
+                boxstyle='square,pad=0',
                 facecolor=color, edgecolor=color, linewidth=1, zorder=3
             )
             ax1.add_patch(rect)
-
-            # سعر الإغلاق
             ax1.annotate(f'{close:.0f}',
-                         xy=(i, close), xytext=(0, 8),
-                         textcoords='offset points',
+                         xy=(i, max(open_, close)),
+                         xytext=(0, 6), textcoords='offset points',
                          ha='center', va='bottom',
-                         color=color, fontsize=8, fontweight='bold')
+                         color=color, fontsize=9, fontweight='bold')
+            ax1.annotate(f'O:{open_:.0f}',
+                         xy=(i, min(open_, close)),
+                         xytext=(0, -11), textcoords='offset points',
+                         ha='center', va='top',
+                         color='#aaaaaa', fontsize=7)
 
-        # خط السعر
         closes = [d['close'] for d in days]
-        opens  = [d['open']  for d in days]
-        ax1.plot(x, closes, color='#ffd700', linewidth=1, linestyle='--',
-                 alpha=0.5, zorder=1)
+        ax1.plot(x, closes, color='#ffd700', linewidth=1, linestyle='--', alpha=0.4, zorder=1)
 
-        # إعدادات ax1
         ax1.set_xlim(-0.7, len(days) - 0.3)
-        all_p = [d['high'] for d in days] + [d['low'] for d in days]
-        margin = (max(all_p) - min(all_p)) * 0.15
+        all_p  = [d['high'] for d in days] + [d['low'] for d in days]
+        margin = (max(all_p) - min(all_p)) * 0.2
         ax1.set_ylim(min(all_p) - margin, max(all_p) + margin)
         ax1.set_xticks(x)
-        ax1.set_xticklabels(labels, color='#e0e0e0', fontsize=9)
+        ax1.set_xticklabels(labels, color='#e0e0e0', fontsize=11, fontweight='bold')
         ax1.yaxis.set_tick_params(labelcolor='#aaaaaa', labelsize=8)
         ax1.grid(axis='y', color='#2a2a4a', linewidth=0.5, alpha=0.7)
         ax1.set_title(
-            f"📅 {report['week_start']} ← {report['week_end']}",
+            f"XAU/USD Weekly  {report['week_start']}  to  {report['week_end']}",
             color='#ffd700', fontsize=11, fontweight='bold', pad=10
         )
+        ax1.axhline(max(all_p), color='#00d4aa', linewidth=0.5, linestyle=':', alpha=0.5)
+        ax1.axhline(min(all_p), color='#ff4757', linewidth=0.5, linestyle=':', alpha=0.5)
+        ax1.text(-0.65, max(all_p), f'H:{max(all_p):.0f}', color='#00d4aa', fontsize=7, va='bottom')
+        ax1.text(-0.65, min(all_p), f'L:{min(all_p):.0f}', color='#ff4757', fontsize=7, va='top')
 
-        # شارت التغيير اليومي (بار)
         changes = [d['change'] for d in days]
         colors  = ['#00d4aa' if c >= 0 else '#ff4757' for c in changes]
-        ax2.bar(x, changes, color=colors, width=0.6, zorder=2)
-        ax2.axhline(0, color='#555577', linewidth=1)
+        ax2.bar(x, changes, color=colors, width=0.6, zorder=2, alpha=0.9)
+        ax2.axhline(0, color='#888899', linewidth=1)
         for i, c in enumerate(changes):
             sign = '+' if c >= 0 else ''
-            ax2.annotate(f'{sign}{c:.0f}',
-                         xy=(i, c), xytext=(0, 4 if c >= 0 else -12),
+            ax2.annotate(f'{sign}{c:.0f}$',
+                         xy=(i, c), xytext=(0, 5 if c >= 0 else -13),
                          textcoords='offset points',
                          ha='center', color='#e0e0e0', fontsize=8)
         ax2.set_xlim(-0.7, len(days) - 0.3)
         ax2.set_xticks(x)
-        ax2.set_xticklabels(labels, color='#e0e0e0', fontsize=9)
+        ax2.set_xticklabels(labels, color='#e0e0e0', fontsize=11, fontweight='bold')
         ax2.yaxis.set_tick_params(labelcolor='#aaaaaa', labelsize=8)
         ax2.grid(axis='y', color='#2a2a4a', linewidth=0.5, alpha=0.7)
-        ax2.set_ylabel('التغيير $', color='#aaaaaa', fontsize=8)
+        ax2.set_ylabel('Change $', color='#aaaaaa', fontsize=8)
 
-        # معلومات الملخص
-        total = report['total_chg']
-        sign  = '+' if total >= 0 else ''
-        color = '#00d4aa' if total >= 0 else '#ff4757'
-        fig.text(0.5, 0.01,
-                 f"الإجمالي: {sign}{total:.2f}$  |  "
-                 f"صاعد: {report['bull_days']}  هابط: {report['bear_days']}  |  "
-                 f"نطاق: {report['week_range']:.2f}$",
-                 ha='center', color=color, fontsize=9)
+        total       = report['total_chg']
+        sign        = '+' if total >= 0 else ''
+        total_color = '#00d4aa' if total >= 0 else '#ff4757'
+        fig.text(
+            0.5, 0.005,
+            f"Total: {sign}{total:.2f}$  |  Up:{report['bull_days']}  Down:{report['bear_days']}  |  Range:{report['week_range']:.2f}$",
+            ha='center', color=total_color, fontsize=9
+        )
 
         plt.tight_layout(rect=[0, 0.04, 1, 1])
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=130, bbox_inches='tight',
-                    facecolor='#1a1a2e')
+        plt.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor='#1a1a2e')
         plt.close(fig)
         buf.seek(0)
         return buf.read()
+
     except Exception as e:
         log.error(f"generate_weekly_chart error: {e}")
         return None
 
-
-
-    """يرسم شارت كاندل مع EMA + Trendlines + دعم ومقاومة"""
-    try:
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-        import io
-
-        closes = d['close'][-60:]
-        opens  = d['open'][-60:]
-        highs  = d['high'][-60:]
-        lows   = d['low'][-60:]
-        n = len(closes)
-        xs = list(range(n))
-
-        # EMAs
-        ema20 = calc_ema(closes, 20)[-n:]
-        ema50 = calc_ema(closes, 50)[-n:]
-
-        # Pivot Points
-        H = max(highs); L = min(lows); C = closes[-1]
-        PP = (H + L + C) / 3
-        R1 = 2*PP - L;  R2 = PP + (H-L)
-        S1 = 2*PP - H;  S2 = PP - (H-L)
-
-        # ATR / TP / SL
-        atr  = sig.get('ATR', (H-L)*0.01)
-        price= sig.get('price', C)
-        dire = sig.get('direction', 'NEUTRAL')
-        tp1  = price + atr*1.5 if dire=='BULLISH' else price - atr*1.5
-        sl   = price - atr     if dire=='BULLISH' else price + atr
-
-        # Trendlines
-        trendlines = detect_trendlines(highs, lows, n)
-
-        # ── رسم الشارت (subplots: شارت + RSI) ──
-        fig, (ax, ax_rsi) = plt.subplots(
-            2, 1, figsize=(13, 8),
-            gridspec_kw={'height_ratios': [3, 1]},
-            facecolor='#0d1117'
-        )
-        ax.set_facecolor('#0d1117')
-        ax_rsi.set_facecolor('#0d1117')
-
-        # كاندل ستيك
-        for i in xs:
-            o, c_, h, l = opens[i], closes[i], highs[i], lows[i]
-            color = '#26a69a' if c_ >= o else '#ef5350'
-            ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=2)
-            body_h = abs(c_ - o)
-            body_y = min(o, c_)
-            rect = plt.Rectangle((i-0.35, body_y), 0.7,
-                                  max(body_h, atr*0.05),
-                                  color=color, zorder=3)
-            ax.add_patch(rect)
-
-        # EMA
-        ax.plot(xs, ema20, color='#f6c90e', linewidth=1.5, label='EMA 20', zorder=4)
-        ax.plot(xs, ema50, color='#2196F3', linewidth=1.5, label='EMA 50', zorder=4)
-
-        # ── Trendlines ──
-        for tl in trendlines:
-            ax.plot([tl['x1'], tl['x2']], [tl['y1'], tl['y2']],
-                    color=tl['color'], linewidth=2.0,
-                    linestyle='--' if tl['type']=='channel' else '-',
-                    alpha=0.85, zorder=5,
-                    label=tl['label'])
-            # نقاط الارتداد
-            ax.scatter(tl['x1'], tl['y1'], color=tl['color'],
-                       s=40, zorder=6, alpha=0.8)
-
-        # Pivot Lines
-        ax.axhline(R1, color='#ef5350', linewidth=1.0, linestyle='--', alpha=0.7)
-        ax.axhline(R2, color='#ef5350', linewidth=0.7, linestyle=':', alpha=0.5)
-        ax.axhline(S1, color='#26a69a', linewidth=1.0, linestyle='--', alpha=0.7)
-        ax.axhline(S2, color='#26a69a', linewidth=0.7, linestyle=':', alpha=0.5)
-        ax.axhline(PP, color='#9c27b0', linewidth=0.8, linestyle='-', alpha=0.6)
-
-        ax.text(n+0.3, R1, f'R1 {R1:.1f}', color='#ef5350', fontsize=7, va='center', fontweight='bold')
-        ax.text(n+0.3, R2, f'R2 {R2:.1f}', color='#ef5350', fontsize=7, va='center', alpha=0.7)
-        ax.text(n+0.3, S1, f'S1 {S1:.1f}', color='#26a69a', fontsize=7, va='center', fontweight='bold')
-        ax.text(n+0.3, S2, f'S2 {S2:.1f}', color='#26a69a', fontsize=7, va='center', alpha=0.7)
-        ax.text(n+0.3, PP, f'PP {PP:.1f}', color='#9c27b0', fontsize=7, va='center')
-
-        # TP / SL
-        if dire != 'NEUTRAL':
-            tc = '#26a69a' if dire=='BULLISH' else '#ef5350'
-            sc = '#ef5350' if dire=='BULLISH' else '#26a69a'
-            ax.axhline(tp1, color=tc, linewidth=1.2, linestyle='-.', alpha=0.9)
-            ax.axhline(sl,  color=sc, linewidth=1.2, linestyle='-.', alpha=0.9)
-            ax.text(0.5, tp1, f'TP {tp1:.1f}', color=tc, fontsize=8, va='bottom', fontweight='bold')
-            ax.text(0.5, sl,  f'SL {sl:.1f}',  color=sc, fontsize=8, va='top',    fontweight='bold')
-
-        # السعر الحالي
-        ax.axhline(price, color='#ffffff', linewidth=0.8, linestyle='-', alpha=0.4)
-        ax.text(n+0.3, price, f'{price:.2f}', color='#ffffff', fontsize=9,
-                va='center', fontweight='bold',
-                bbox=dict(boxstyle='round,pad=0.2', facecolor='#1f2937',
-                          edgecolor='white', alpha=0.8))
-
-        # ── RSI Panel ──
-        rsi_vals = calc_rsi(d['close'], 14)[-n:]
-        rsi_xs   = list(range(n))
-        ax_rsi.plot(rsi_xs, rsi_vals, color='#ce93d8', linewidth=1.2)
-        ax_rsi.axhline(70, color='#ef5350', linewidth=0.8, linestyle='--', alpha=0.6)
-        ax_rsi.axhline(30, color='#26a69a', linewidth=0.8, linestyle='--', alpha=0.6)
-        ax_rsi.axhline(50, color='#ffffff', linewidth=0.5, linestyle=':', alpha=0.3)
-        ax_rsi.fill_between(rsi_xs, rsi_vals, 70,
-                            where=[r > 70 for r in rsi_vals],
-                            color='#ef5350', alpha=0.2)
-        ax_rsi.fill_between(rsi_xs, rsi_vals, 30,
-                            where=[r < 30 for r in rsi_vals],
-                            color='#26a69a', alpha=0.2)
-        ax_rsi.set_ylim(0, 100)
-        ax_rsi.set_xlim(-1, n+4)
-        ax_rsi.text(n+0.3, rsi_vals[-1], f'{rsi_vals[-1]:.0f}',
-                    color='#ce93d8', fontsize=8, va='center')
-        ax_rsi.text(1, 72, 'OB', color='#ef5350', fontsize=7, alpha=0.7)
-        ax_rsi.text(1, 25, 'OS', color='#26a69a', fontsize=7, alpha=0.7)
-        ax_rsi.set_ylabel('RSI', color='#8b949e', fontsize=8)
-        ax_rsi.tick_params(colors='#8b949e', labelsize=7)
-        ax_rsi.spines[:].set_color('#30363d')
-        ax_rsi.set_facecolor('#0d1117')
-
-        # تنسيق
-        ax.tick_params(colors='#8b949e', labelsize=8)
-        ax.spines[:].set_color('#30363d')
-        ax.yaxis.set_tick_params(labelright=True, labelleft=False)
-        ax.yaxis.tick_right()
-        ax.set_xlim(-1, n+4)
-        ax.grid(True, color='#21262d', linewidth=0.5, alpha=0.5)
-        ax_rsi.grid(True, color='#21262d', linewidth=0.5, alpha=0.3)
-
-        # عنوان
-        dir_ar  = '🟢 BULLISH' if dire=='BULLISH' else '🔴 BEARISH' if dire=='BEARISH' else '🟡 NEUTRAL'
-        rsi_now = sig.get('RSI', 50)
-        bs = sig.get('buyScore', 0); ss = sig.get('sellScore', 0)
-        trend_str = ' | '.join([t['label'] for t in trendlines]) if trendlines else 'No Trend'
-        ax.set_title(
-            f'GOLD / USD  [{tf}]   ${price:,.2f}   {dir_ar}\n'
-            f'RSI: {rsi_now:.1f}   BUY: {bs}/12   SELL: {ss}/12   {trend_str}\n'
-            f'{now_local().strftime("%Y-%m-%d %H:%M")} GMT+2',
-            color='white', fontsize=10, pad=8, fontweight='bold'
-        )
-        ax.legend(loc='upper left', facecolor='#1f2937',
-                  edgecolor='#30363d', labelcolor='white', fontsize=7)
-
-        plt.tight_layout(pad=0.5)
-
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=130, bbox_inches='tight',
-                    facecolor='#0d1117')
-        plt.close(fig)
-        buf.seek(0)
-        return buf.read()
-
-    except Exception as e:
-        log.error(f"generate_chart error: {e}")
-        return None
-
-
-async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """أمر /chart — يبعت صورة شارت احترافي"""
-    tf_arg = context.args[0] if context.args else '1h'
-    tf_cfg = TIMEFRAMES.get(tf_arg, TIMEFRAMES['1h'])
-    await update.message.reply_text(f"⏳ جاري رسم الشارت على {tf_arg}...")
-    d = fetch_ohlcv(tf_cfg['interval'], tf_cfg['outputsize'])
-    if not d:
-        await update.message.reply_text("❌ فشل جلب البيانات.")
-        return
-    sig = full_analysis(d)
-    img = generate_chart(d, sig, tf_arg.upper())
-    if img:
-        await update.message.reply_photo(
-            photo=img,
-            caption=(f"📊 *GOLD [{tf_arg.upper()}]*\n"
-                     f"💰 ${sig['price']:,.3f}\n"
-                     f"{'🟢 BULLISH' if sig['direction']=='BULLISH' else '🔴 BEARISH' if sig['direction']=='BEARISH' else '🟡 NEUTRAL'}\n"
-                     f"BUY {sig['buyScore']}/12 · SELL {sig['sellScore']}/12"),
-            parse_mode=ParseMode.HTML,
-            reply_markup=main_keyboard()
-        )
-    else:
-        await update.message.reply_text("❌ فشل رسم الشارت.")
-
-
-# ════════════════════════════════════════════════════════════════
-#  ALERT ENGINE
-# ════════════════════════════════════════════════════════════════
-
-async def check_and_send_alerts(context: ContextTypes.DEFAULT_TYPE):
-    """Called every minute by JobQueue."""
-    if not alert_subscribers:
-        return
-
-    d = fetch_ohlcv('1min', 200)
-    if not d: return
-
-    sig = full_analysis(d)
-
-    for chat_id in list(alert_subscribers):
-        last = alert_last_signal.get(chat_id, '')
-
-        # Signal change alert
-        if sig['direction'] != 'NEUTRAL' and sig['direction'] != last:
-            alert_last_signal[chat_id] = sig['direction']
-            try:
-                msg = f"🔔 إشارة جديدة!\n\n" + fmt_analysis_msg(sig, '1m')
-                await context.bot.send_message(
-                    chat_id=chat_id, text=msg,
-                    parse_mode=ParseMode.HTML
-                )
-            except Exception as e:
-                log.warning(f"Alert send error for {chat_id}: {e}")
-
-        # Level alerts
-        price = sig['price']
-        for alert in level_alerts.get(chat_id, []):
-            if alert.get('triggered'): continue
-            hit = (price >= alert['price'] if alert['type']=='above'
-                   else price <= alert['price'])
-            if hit:
-                alert['triggered'] = True
-                try:
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"🔔 Level Alert!\n"
-                             f"{alert.get('label','')}\n"
-                             f"السعر وصل: {fmt_price(price)}\n"
-                             f"المستوى: {fmt_price(alert['price'])}",
-                        parse_mode=ParseMode.HTML
-                    )
-                except: pass
-
-async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
-    """Dashboard صباحي شامل كل يوم 07:00 UTC"""
-    chat_ids = list(set(REPORT_CHAT_IDS + list(alert_subscribers)))
-    if not chat_ids:
-        return
-
-    try:
-        d   = fetch_ohlcv('1h', 200)
-        if not d:
-            return
-
-        sig    = full_analysis(d)
-        price  = sig['price']
-        pv     = calc_pivots(max(d['high'][-5:]), min(d['low'][-5:]), d['close'][-1])
-        fib    = calc_fibonacci(max(d['high'][-60:]), min(d['low'][-60:]))
-        gann   = calc_gann_square(price)
-        ms     = market_structure(d)
-        hour   = datetime.now(timezone.utc).hour
-        period = '🌅 صباحي' if 5 <= hour < 12 else '🌇 مسائي'
-        sess   = get_current_session()
-
-        # إشارة MTF
-        mtf_results = {}
-        for tf_key, tf_cfg in [('1m','1min'), ('5m','5min'), ('15m','15min'), ('1h','1h')]:
-            try:
-                d_tf = fetch_ohlcv(tf_cfg, 100)
-                if d_tf:
-                    s = full_analysis(d_tf)
-                    mtf_results[tf_key] = s['direction']
-            except:
-                pass
-
-        bull_tf = sum(1 for v in mtf_results.values() if v == 'BULLISH')
-        bear_tf = sum(1 for v in mtf_results.values() if v == 'BEARISH')
-        if bull_tf >= 3:
-            mtf_signal = '🟢 صاعد قوي'
-        elif bear_tf >= 3:
-            mtf_signal = '🔴 هابط قوي'
-        elif bull_tf > bear_tf:
-            mtf_signal = '🟡 صاعد ضعيف'
-        elif bear_tf > bull_tf:
-            mtf_signal = '🟡 هابط ضعيف'
-        else:
-            mtf_signal = '⚪ محايد'
-
-        # أقرب Gann levels
-        g_res = gann['resistance'][0]['level'] if gann['resistance'] else price + 50
-        g_sup = gann['support'][0]['level']    if gann['support']    else price - 50
-
-        # أقرب Fibonacci
-        fib_levels = sorted([
-            (abs(v - price), k, v)
-            for k, v in fib.items()
-            if k not in ('H', 'L') and isinstance(v, float)
-        ])
-        fib_near = fib_levels[:2] if fib_levels else []
-
-        lines = [
-            f"╔══ 📰 Dashboard الذهب {period} ══╗",
-            f"",
-            f"💰 السعر: {fmt_price(price)}",
-            f"📊 الاتجاه: {fmt_direction(sig['direction'])}",
-            f"🏗 هيكل السوق: {ms}",
-            f"🕐 السيشن: {sess.get('name', 'غير معروف')}",
-            f"",
-            f"📡 MTF Signal: {mtf_signal}",
-            f"   " + "  ".join([f"{k}:{('🟢' if v=='BULLISH' else '🔴' if v=='BEARISH' else '⚪')}"
-                                  for k, v in mtf_results.items()]),
-            f"",
-            f"📈 المؤشرات:",
-            f"   RSI: {sig['RSI']:.1f}  {'⚠️ OB' if sig['RSI']>70 else '⚠️ OS' if sig['RSI']<30 else '✅'}",
-            f"   MACD: {'↑ صاعد' if sig['MACD']['bull'] else '↓ هابط'}",
-            f"   Supertrend: {'🟢 BUY' if sig['st_bull'] else '🔴 SELL'}",
-            f"   Stoch RSI: K={sig['SRSI']['k']}",
-            f"",
-            f"📌 مستويات اليوم:",
-            f"   🔴 R2: {pv['R2']:.2f}  R1: {pv['R1']:.2f}",
-            f"   ⬜ PP: {pv['PP']:.2f}",
-            f"   🟢 S1: {pv['S1']:.2f}  S2: {pv['S2']:.2f}",
-            f"",
-            f"⬜ Gann Square:",
-            f"   ▲ مقاومة: {g_res:.2f}  (+{g_res-price:.2f}$)",
-            f"   ▼ دعم:    {g_sup:.2f}  (-{price-g_sup:.2f}$)",
-        ]
-
-        if fib_near:
-            lines.append(f"")
-            lines.append(f"🌀 Fibonacci أقرب مستويات:")
-            for _, k, v in fib_near:
-                arrow = "▲" if v > price else "▼"
-                lines.append(f"   {arrow} {k}: {v:.2f}")
-
-        if sig['direction'] != 'NEUTRAL':
-            is_b = sig['direction'] == 'BULLISH'
-            p, a = price, sig['ATR']
-            lines += [
-                f"",
-                f"🎯 TP/SL المقترح:",
-                f"   {'🟢' if is_b else '🔴'} TP1: {fmt_price(p + a*1.5 if is_b else p - a*1.5)}",
-                f"   {'🟢' if is_b else '🔴'} TP2: {fmt_price(p + a*3   if is_b else p - a*3)}",
-                f"   {'🔴' if is_b else '🟢'} SL:  {fmt_price(p - a     if is_b else p + a)}",
-            ]
-
-        lines += [
-            f"",
-            f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2",
-            f"╚════════════════════════╝"
-        ]
-
-        text = '\n'.join(lines)
-        for cid in chat_ids:
-            try:
-                await context.bot.send_message(
-                    cid, text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=main_keyboard()
-                )
-            except Exception as e:
-                log.warning(f"Dashboard send error {cid}: {e}")
-
-    except Exception as e:
-        log.error(f"send_daily_report error: {e}")
 
 
 def get_smart_signal(d1m, d5m, d15m, d1h) -> dict:
@@ -2681,11 +2603,12 @@ def main_keyboard():
         [
             InlineKeyboardButton("📌 Pivots",       callback_data="pivots"),
             InlineKeyboardButton("🌀 Fibonacci",    callback_data="fib"),
-            InlineKeyboardButton("⚡ SMC",           callback_data="smc"),
+            InlineKeyboardButton("🔮 نماذج",        callback_data="patterns"),
         ],
         [
             InlineKeyboardButton("⬜ Gann Square",  callback_data="gann_square"),
             InlineKeyboardButton("📐 Gann Fan",     callback_data="gann_fan"),
+            InlineKeyboardButton("⚡ SMC",           callback_data="smc"),
         ],
         [
             InlineKeyboardButton("🔔 تنبيهات ON/OFF", callback_data="alert"),
@@ -2990,6 +2913,70 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2",
                 ]
                 text = '\n'.join(lines)
+        except Exception as e:
+            text = f"❌ خطأ: {str(e)[:100]}"
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                       reply_markup=main_keyboard())
+
+    elif data == "patterns":
+        await query.message.reply_text("⏳ جاري تحليل النماذج على كل الفريمات...",
+                                       reply_markup=main_keyboard())
+        try:
+            loop    = asyncio.get_event_loop()
+            results = await asyncio.wait_for(
+                loop.run_in_executor(None, analyze_patterns_mtf),
+                timeout=30.0
+            )
+            if not results:
+                text = ("🔮 لم يتم اكتشاف نماذج واضحة الآن.\n\n"
+                        "السوق في مرحلة تحضير — راجع لاحقاً.")
+            else:
+                lines = ["🔮 النماذج المكتشفة على التايم فريمز\n"]
+                total_bull = 0
+                total_bear = 0
+
+                for tf_key in ['1m', '5m', '15m', '1h', '4h']:
+                    if tf_key not in results:
+                        continue
+                    r = results[tf_key]
+                    tf_lines = []
+
+                    for p in r.get('candles', []):
+                        icon = '🟢' if p['signal']=='BULLISH' else '🔴' if p['signal']=='BEARISH' else '🟡'
+                        stars = '★' * p['strength']
+                        tf_lines.append(f"  {icon} {p['name']} {stars}")
+                        tf_lines.append(f"     {p['desc']}")
+                        if p['signal'] == 'BULLISH': total_bull += p['strength']
+                        if p['signal'] == 'BEARISH': total_bear += p['strength']
+
+                    for p in r.get('charts', []):
+                        icon = '🟢' if p['signal']=='BULLISH' else '🔴' if p['signal']=='BEARISH' else '🟡'
+                        stars = '★' * p['strength']
+                        tf_lines.append(f"  {icon} {p['name']} {stars}")
+                        tf_lines.append(f"     {p['desc']}")
+                        if 'target' in p:
+                            tf_lines.append(f"     هدف: {p['target']:.2f}")
+                        if p['signal'] == 'BULLISH': total_bull += p['strength']
+                        if p['signal'] == 'BEARISH': total_bear += p['strength']
+
+                    if tf_lines:
+                        lines.append(f"⏱ {r['label']} (السعر: {r['price']:.2f})")
+                        lines.extend(tf_lines)
+                        lines.append("")
+
+                # ملخص
+                lines.append("─────────────────")
+                if total_bull > total_bear:
+                    bias = f"🟢 الاتجاه العام: صاعد ({total_bull} vs {total_bear})"
+                elif total_bear > total_bull:
+                    bias = f"🔴 الاتجاه العام: هابط ({total_bear} vs {total_bull})"
+                else:
+                    bias = f"🟡 الاتجاه العام: محايد"
+                lines.append(bias)
+                lines.append(f"🕐 {now_local().strftime('%H:%M:%S')} GMT+2")
+                text = '\n'.join(lines)
+        except asyncio.TimeoutError:
+            text = "⏱ انتهت المهلة — جرب مرة تانية."
         except Exception as e:
             text = f"❌ خطأ: {str(e)[:100]}"
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
