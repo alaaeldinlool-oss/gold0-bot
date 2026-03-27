@@ -3716,6 +3716,50 @@ async def auto_hourly_signal(context):
         log.error(f"auto_hourly_signal error: {e}")
 
 
+async def check_and_send_alerts(context):
+    """تحقق من التنبيهات السعرية وابعتها لو اتحققت"""
+    if not alert_subscribers:
+        return
+    try:
+        price = get_price_cached()
+        if not price:
+            return
+        for chat_id in list(alert_subscribers):
+            alerts = level_alerts.get(chat_id, [])
+            triggered = []
+            remaining = []
+            for a in alerts:
+                hit = False
+                if a['type'] == 'above' and price >= a['price']:
+                    hit = True
+                elif a['type'] == 'below' and price <= a['price']:
+                    hit = True
+                if hit:
+                    triggered.append(a)
+                else:
+                    remaining.append(a)
+            if triggered:
+                level_alerts[chat_id] = remaining
+                for a in triggered:
+                    icon = '🚀' if a['type'] == 'above' else '📉'
+                    text = (
+                        f"{icon} تنبيه سعري!\n\n"
+                        f"السعر وصل {fmt_price(price)}\n"
+                        f"المستوى المحدد: {fmt_price(a['price'])}\n"
+                        f"({a.get('label', '')})"
+                    )
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id, text=text,
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=main_keyboard()
+                        )
+                    except Exception as e:
+                        log.warning(f"Alert send error: {e}")
+    except Exception as e:
+        log.error(f"check_and_send_alerts error: {e}")
+
+
 async def check_strong_signal(context):
     """تنبيه فوري عند إشارة قوية جداً (BUY/SELL >= 9/12)"""
     if not alert_subscribers:
