@@ -3610,6 +3610,31 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard()
     )
 
+async def cmd_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """رسم شارت الذهب"""
+    await update.message.reply_text("⏳ جاري رسم الشارت...")
+    try:
+        tf  = '1h'
+        cfg = TIMEFRAMES.get(tf, TIMEFRAMES['1h'])
+        d   = fetch_ohlcv(cfg['interval'], cfg['outputsize'])
+        if not d:
+            await update.message.reply_text("❌ فشل جلب البيانات.", reply_markup=main_keyboard())
+            return
+        sig = full_analysis(d)
+        loop = asyncio.get_event_loop()
+        img  = await loop.run_in_executor(None, generate_chart, d, sig, tf.upper())
+        if img:
+            await update.message.reply_photo(
+                photo=img,
+                caption=f"📊 GOLD [{tf.upper()}] | {fmt_price(sig['price'])} | {'🟢 BULLISH' if sig['direction']=='BULLISH' else '🔴 BEARISH' if sig['direction']=='BEARISH' else '🟡 NEUTRAL'}",
+                reply_markup=main_keyboard()
+            )
+        else:
+            await update.message.reply_text("❌ فشل رسم الشارت.", reply_markup=main_keyboard())
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطأ: {str(e)[:100]}", reply_markup=main_keyboard())
+
+
 async def cmd_egypt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """أسعار الذهب في مصر"""
     await update.message.reply_text("⏳ جاري جلب أسعار الذهب المصري...")
