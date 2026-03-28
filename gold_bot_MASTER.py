@@ -1502,7 +1502,36 @@ SESSIONS = {
 
 def get_current_session() -> dict:
     """احسب السيشن الحالي بناءً على الوقت UTC"""
-    utc_hour = datetime.now(timezone.utc).hour
+    utc_now  = datetime.now(timezone.utc)
+    utc_hour = utc_now.hour
+    weekday  = utc_now.weekday()  # 0=الاثنين, 5=السبت, 6=الأحد
+
+    # السبت والأحد — السوق مغلق
+    # السبت كله مغلق
+    # الأحد مغلق لحد 22:00 UTC
+    if weekday == 5:  # السبت
+        return {
+            'name':       'السوق مغلق — عطلة نهاية الأسبوع',
+            'icon':       '🔴',
+            'active':     False,
+            'nature':     'السوق مغلق — لا تداول في الذهب',
+            'tip':        'السوق يفتح الأحد الساعة 22:00 UTC (00:00 GMT+2)',
+            'next':       '🌏 السوق يفتح الأحد 22:00 UTC',
+            'hours_left': 0,
+            'weekend':    True,
+        }
+    if weekday == 6 and utc_hour < 22:  # الأحد قبل 22:00
+        hours_left = 22 - utc_hour
+        return {
+            'name':       'السوق مغلق — الأحد',
+            'icon':       '🔴',
+            'active':     False,
+            'nature':     'السوق مغلق — يفتح مع بداية السيشن الآسيوي',
+            'tip':        f'السوق يفتح بعد {hours_left} ساعة تقريباً',
+            'next':       f'🌏 Asian Session يبدأ الساعة 22:00 UTC (اليوم)',
+            'hours_left': hours_left,
+            'weekend':    True,
+        }
 
     # تداخل London-NY (الأقوى)
     if 13 <= utc_hour < 16:
@@ -1510,6 +1539,7 @@ def get_current_session() -> dict:
         s['active'] = True
         s['next'] = 'New York ينتهي الـ Overlap ويكمل'
         s['hours_left'] = 16 - utc_hour
+        s['weekend'] = False
         return s
 
     # London
@@ -1518,6 +1548,7 @@ def get_current_session() -> dict:
         s['active'] = True
         s['next'] = '⚡ Overlap مع New York يبدأ الساعة 13:00 UTC'
         s['hours_left'] = 16 - utc_hour
+        s['weekend'] = False
         return s
 
     # New York
@@ -1526,11 +1557,13 @@ def get_current_session() -> dict:
         s['active'] = True
         s['next'] = '🌏 Asian Session يبدأ الساعة 00:00 UTC'
         s['hours_left'] = 21 - utc_hour
+        s['weekend'] = False
         return s
 
     # Asian
     s = SESSIONS['asian'].copy()
     s['active'] = True
+    s['weekend'] = False
     if utc_hour < 8:
         s['next'] = '🏦 London Session يبدأ الساعة 08:00 UTC'
         s['hours_left'] = 8 - utc_hour
@@ -1541,65 +1574,83 @@ def get_current_session() -> dict:
 
 def fmt_session_msg(price: float, sig: dict) -> str:
     """رسالة تحليل السيشن الكاملة"""
-    utc_now  = datetime.now(timezone.utc)
-    local_now= now_local()
-    session  = get_current_session()
+    utc_now   = datetime.now(timezone.utc)
+    local_now = now_local()
+    session   = get_current_session()
 
-    # السيشن القادم
-    sessions_order = [
-        ('🌏 Asian',         '00:00', '08:00', 'UTC'),
-        ('🏦 London',        '08:00', '16:00', 'UTC'),
-        ('⚡ London-NY',     '13:00', '16:00', 'UTC'),
-        ('🗽 New York',      '13:00', '21:00', 'UTC'),
-    ]
+    # السوق مغلق في عطلة نهاية الأسبوع
+    if session.get('weekend'):
+        day_ar = 'السبت' if utc_now.weekday() == 5 else 'الأحد'
+        lines = [
+            f"╔══ 🕐 SESSION ANALYSIS ══╗",
+            f"",
+            f"🔴 السوق مغلق — {day_ar}",
+            f"",
+            f"⏰ الوقت الحالي:",
+            f"   UTC:    {utc_now.strftime('%H:%M')}",
+            f"   GMT+2:  {local_now.strftime('%H:%M')}",
+            f"",
+            f"📌 {session['nature']}",
+            f"💡 {session['tip']}",
+            f"",
+            f"⏭ القادم:",
+            f"   {session['next']}",
+            f"",
+            f"💰 آخر سعر: {fmt_price(price)}",
+            f"",
+            f"╚══════════════════════════╝",
+        ]
+        return '\n'.join(lines)
 
     dire = sig.get('direction', 'NEUTRAL')
     bs   = sig.get('buyScore', 0)
     ss   = sig.get('sellScore', 0)
-    atr  = sig.get('ATR', 0)
 
     # توافق الإشارة مع السيشن
-    if session['name_ar'] == 'السيشن الآسيوي':
-        compat = '⚠️ سيولة منخفضة — إشارات أقل موثوقية'
+    sess_name = session.get('name_ar', '')
+    if 'آسيوي' in sess_name:
+        compat = 'سيولة منخفضة — إشارات أقل موثوقية'
     elif dire == 'NEUTRAL':
-        compat = '⏳ لا توجد إشارة واضحة دلوقتي'
+        compat = 'لا توجد إشارة واضحة دلوقتي'
     elif bs >= 8 or ss >= 8:
-        compat = '🔥 إشارة قوية في سيشن نشيط — فرصة ممتازة!'
+        compat = 'إشارة قوية في سيشن نشيط — فرصة ممتازة!'
     else:
-        compat = '📊 إشارة متوسطة — انتظر تأكيد أكتر'
+        compat = 'إشارة متوسطة — انتظر تأكيد أكتر'
+
+    dire_icon = '🟢 BULLISH' if dire=='BULLISH' else '🔴 BEARISH' if dire=='BEARISH' else '🟡 NEUTRAL'
 
     lines = [
         f"╔══ 🕐 SESSION ANALYSIS ══╗",
         f"",
-        f"{session['color']} السيشن الحالي:",
-        f"   {session['name']}",
-        f"   ({session['name_ar']})",
+        f"{session.get('color','🔵')} السيشن الحالي:",
+        f"   {session.get('name', '')}",
+        f"   ({session.get('name_ar', '')})",
         f"",
         f"⏰ الوقت:",
-        f"   🌍 UTC:    `{utc_now.strftime('%H:%M')}`",
-        f"   🇪🇬 GMT+2: `{local_now.strftime('%H:%M')}`",
-        f"   ⏳ متبقي: `{session['hours_left']} ساعة تقريباً`",
+        f"   UTC:    {utc_now.strftime('%H:%M')}",
+        f"   GMT+2:  {local_now.strftime('%H:%M')}",
+        f"   متبقي: {session.get('hours_left', 0)} ساعة تقريباً",
         f"",
         f"📊 طبيعة السيشن:",
-        f"   {session['nature']}",
-        f"   {session['risk']}",
+        f"   {session.get('nature', '')}",
+        f"   {session.get('risk', '')}",
         f"",
         f"🥇 الذهب في هذا السيشن:",
-        f"   {session['gold']}",
+        f"   {session.get('gold', '')}",
         f"",
         f"💡 نصيحة:",
-        f"   {session['tip']}",
+        f"   {session.get('tip', '')}",
         f"",
         f"📈 الإشارة الحالية:",
-        f"   💰 السعر: *{fmt_price(price)}*",
-        f"   {'🟢 BULLISH' if dire=='BULLISH' else '🔴 BEARISH' if dire=='BEARISH' else '🟡 NEUTRAL'}",
+        f"   السعر: {fmt_price(price)}",
+        f"   {dire_icon}",
         f"   BUY {bs}/12 · SELL {ss}/12",
         f"",
         f"🔗 التوافق مع السيشن:",
         f"   {compat}",
         f"",
         f"⏭ القادم:",
-        f"   {session['next']}",
+        f"   {session.get('next', '')}",
         f"",
         f"╚══════════════════════════╝",
     ]
