@@ -240,7 +240,7 @@ def update_signals_result():
     if db is None:
         return
     try:
-        price = get_price()
+        price = get_price_cached()
         if not price:
             return
         pending = list(db.signals.find({'result': 'pending'}))
@@ -310,15 +310,25 @@ def get_stats(chat_id: int) -> dict:
 #  KEEP-ALIVE — يمنع Render من إيقاف البوت
 # ════════════════════════════════════════════════════════════════
 def keep_alive():
-    """سيرفر صغير يخلي Render يظن في طلبات دايماً"""
+    """سيرفر صغير يمنع Render من إيقاف البوت"""
     try:
         from http.server import HTTPServer, BaseHTTPRequestHandler
+        import json
+
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
                 self.end_headers()
-                self.wfile.write(b'Gold Bot is alive!')
-            def log_message(self, *args): pass  # اخفي الـ logs
+                status = {
+                    'status': 'alive',
+                    'bot': 'Gold Master Bot',
+                    'time': now_local().strftime('%Y-%m-%d %H:%M:%S GMT+2'),
+                    'subscribers': len(alert_subscribers),
+                }
+                self.wfile.write(json.dumps(status).encode())
+            def log_message(self, *args): pass
+
         port = int(os.environ.get('PORT', 8080))
         server = HTTPServer(('0.0.0.0', port), Handler)
         log.info(f'Keep-alive server on port {port}')
@@ -326,8 +336,29 @@ def keep_alive():
     except Exception as e:
         log.warning(f'Keep-alive failed: {e}')
 
-# شغّل الـ keep-alive في thread منفصل
+
+def self_ping():
+    """يعمل ping لنفسه كل 8 دقائق عشان Render ميناموش"""
+    import threading
+    def ping_loop():
+        time.sleep(30)  # استنى شوية بعد الـ start
+        while True:
+            try:
+                # جرب الـ external URL أول
+                ext_url = os.environ.get('RENDER_EXTERNAL_URL', '')
+                port    = int(os.environ.get('PORT', 8080))
+                url     = ext_url if ext_url else f'http://localhost:{port}/'
+                requests.get(url, timeout=10)
+                log.debug(f'Self-ping OK: {url}')
+            except Exception as e:
+                log.debug(f'Self-ping failed: {e}')
+            time.sleep(480)  # كل 8 دقائق
+    threading.Thread(target=ping_loop, daemon=True).start()
+
+
+# شغّل الـ keep-alive والـ self-ping
 threading.Thread(target=keep_alive, daemon=True).start()
+self_ping()
 
 # ════════════════════════════════════════════════════════════════
 #  STATE
@@ -2636,23 +2667,40 @@ def main_keyboard():
 #  DATA CACHE — يقلل الـ API requests
 # ════════════════════════════════════════════════════════════════
 _cache = {}
+_api_calls = []  # tracking API calls per minute
 
-def fetch_ohlcv_cached(interval: str, outputsize: int, ttl: int = 600):
-    """Fetch with cache — بيحفظ البيانات لـ 4 دقائق"""
+def _check_rate_limit() -> bool:
+    """تحقق من الـ rate limit — 7 calls/دقيقة"""
+    global _api_calls
+    now = time.time()
+    _api_calls = [t for t in _api_calls if now - t < 60]
+    if len(_api_calls) >= 7:
+        log.warning(f"Rate limit: {len(_api_calls)}/8 calls used")
+        return False
+    return True
+
+def fetch_ohlcv_cached(interval: str, outputsize: int, ttl: int = 900):
+    """Fetch with smart cache"""
     key = f"{interval}_{outputsize}"
     now = time.time()
     if key in _cache and now - _cache[key]['time'] < ttl:
         return _cache[key]['data']
+    if not _check_rate_limit():
+        return _cache.get(key, {}).get('data')
+    _api_calls.append(now)
     data = fetch_ohlcv(interval, outputsize)
     if data:
         _cache[key] = {'data': data, 'time': now}
     return data
 
-def get_price_cached(ttl: int = 120):
-    """Get price with cache — بيحفظ لدقيقتين"""
+def get_price_cached(ttl: int = 180):
+    """Get price with cache"""
     now = time.time()
     if 'price' in _cache and now - _cache['price']['time'] < ttl:
         return _cache['price']['data']
+    if not _check_rate_limit():
+        return _cache.get('price', {}).get('data')
+    _api_calls.append(now)
     price = get_price()
     if price:
         _cache['price'] = {'data': price, 'time': now}
@@ -3071,7 +3119,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "report":
         await query.message.reply_text("⏳ جاري إعداد التقرير الشامل...",
                                        reply_markup=main_keyboard())
-        price = get_price()
+        price = get_price_cached()
         d     = fetch_ohlcv("5min", 200)
         if not d or not price:
             text = "❌ فشل جلب البيانات."
@@ -3372,7 +3420,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ جاري جلب السعر...")
-    price = get_price()
+    price = get_price_cached()
     if price:
         await update.message.reply_text(
             f"🥇 GOLD / USD\n💰 {fmt_price(price)}\n"
@@ -3765,7 +3813,7 @@ async def check_strong_signal(context):
     if not alert_subscribers:
         return
     try:
-        price = get_price()
+        price = get_price_cached()
         d     = fetch_ohlcv("5min", 200)
         if not price or not d:
             return
