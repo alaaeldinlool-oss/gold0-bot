@@ -112,10 +112,10 @@ except ImportError:
     print("⚠️  ta library not found — using built-in indicators")
 
 try:
-    from groq import Groq
-    HAS_GROQ = True
+    import google.generativeai as genai
+    HAS_GEMINI = True
 except ImportError:
-    HAS_GROQ = False
+    HAS_GEMINI = False
 
 try:
     from pymongo import MongoClient
@@ -170,8 +170,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1Ow
 # TwelveData API Key — twelvedata.com (free plan: 800 req/day)
 TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e")
 
-# Groq API Key (مجاني — من console.groq.com)
-GROQ_KEY        = os.getenv("GROQ_KEY",        "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")
+# Gemini API Key (مجاني — من aistudio.google.com)
+GEMINI_KEY      = os.getenv("GEMINI_KEY",      "AIzaSyAwKZOQvLYOCGeoqxoirHPTbNw0wqGHLg8")
 
 # MongoDB URI (لحفظ الإشارات والإحصائيات)
 MONGODB_URI     = os.getenv("MONGODB_URI",     "mongodb+srv://alaaeldinlool_db_user:97sJMDccaJjmszje@cluster0.oufdfub.mongodb.net/?appName=Cluster0")
@@ -2286,9 +2286,10 @@ async def send_weekly_report(context):
 
         # توقع AI
         ai_text = ""
-        if HAS_GROQ and GROQ_KEY:
+        if HAS_GEMINI and GEMINI_KEY:
             try:
-                client = Groq(api_key=GROQ_KEY)
+                genai.configure(api_key=GEMINI_KEY)
+                model  = genai.GenerativeModel("gemini-2.0-flash")
                 prompt = (
                     f"أنت محلل ذهب محترف. بناءً على بيانات هذا الأسبوع:\n"
                     f"التغيير الإجمالي: {report['total_chg']:+.2f}$\n"
@@ -2296,14 +2297,10 @@ async def send_weekly_report(context):
                     f"نطاق الأسبوع: {report['week_range']:.2f}$\n"
                     f"قدم توقعك للأسبوع القادم في 3 جمل بالعربية."
                 )
-                resp = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=200,
-                )
-                ai_text = f"\n\n🤖 توقع AI للأسبوع القادم:\n{resp.choices[0].message.content}"
-            except:
-                pass
+                resp     = model.generate_content(prompt)
+                ai_text  = f"\n\n🤖 توقع AI للأسبوع القادم:\n{resp.text}"
+            except Exception as _e:
+                log.warning(f"Gemini weekly error: {_e}")
 
         text = fmt_weekly_msg(report, prev) + ai_text
 
@@ -2596,17 +2593,17 @@ def fmt_astro_msg(price: float) -> str:
 # ════════════════════════════════════════════════════════════════
 
 async def claude_analysis(sig: dict) -> str:
-    """تحليل AI شامل: مؤشرات تقنية + Gann + فلكي"""
-    if not HAS_GROQ or not GROQ_KEY:
+    """تحليل AI شامل: مؤشرات تقنية + Gann + فلكي — يعمل بـ Gemini"""
+    if not HAS_GEMINI or not GEMINI_KEY:
         return (
-            "⚠️ Groq AI غير مفعّل.\n\n"
+            "⚠️ Gemini AI غير مفعّل.\n\n"
             "أضف في Render Environment Variables:\n"
-            "  Key:   GROQ_KEY\n"
-            "  Value: مفتاحك من console.groq.com\n\n"
-            "الحصول على مفتاح مجاني:\n"
-            "1. افتح console.groq.com\n"
-            "2. سجّل حساب مجاني\n"
-            "3. أنشئ API Key"
+            "  Key:   GEMINI_KEY\n"
+            "  Value: مفتاحك من aistudio.google.com\n\n"
+            "خطوات الحصول على مفتاح مجاني:\n"
+            "1. افتح aistudio.google.com\n"
+            "2. سجّل بحساب Google\n"
+            "3. اضغط Get API Key — انسخه وضعه في Render"
         )
     try:
         price = sig.get("price", 0)
@@ -2680,19 +2677,17 @@ ATR: {sig.get('ATR', 0):.2f}
 
 اكتب بالعربية بشكل واضح ومنظم. استخدم الأرقام الدقيقة من البيانات أعلاه."""
 
-        client   = Groq(api_key=GROQ_KEY)
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=700,
-            temperature=0.4,
+        genai.configure(api_key=GEMINI_KEY)
+        model    = genai.GenerativeModel(
+            "gemini-2.0-flash",
+            generation_config={"max_output_tokens": 700, "temperature": 0.4},
         )
-        result = response.choices[0].message.content
+        response = model.generate_content(prompt)
+        result   = response.text
 
-        # ── رأس الرسالة ─────────────────────────────────────────
-        bias    = ctx["combined_bias"]
-        b_icon  = "🔴" if bias == "BEARISH" else "🟢" if bias == "BULLISH" else "🟡"
-        header  = (
+        bias   = ctx["combined_bias"]
+        b_icon = "🔴" if bias == "BEARISH" else "🟢" if bias == "BULLISH" else "🟡"
+        header = (
             f"🤖 تحليل AI المدمج\n"
             f"💰 السعر: {price:.3f}  {b_icon} {bias}\n"
             f"🌙 الطور: {ctx['past_phase']['phase'] if ctx['past_phase'] else '—'}\n"
@@ -2703,7 +2698,7 @@ ATR: {sig.get('ATR', 0):.2f}
 
     except Exception as e:
         log.error(f"claude_analysis error: {e}")
-        return f"⚠️ خطأ في Groq AI:\n{str(e)[:200]}"
+        return f"⚠️ خطأ في Gemini AI:\n{str(e)[:200]}"
 
 # ════════════════════════════════════════════════════════════════
 #  CHART GENERATOR — شارت احترافي بالصورة
@@ -3559,16 +3554,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        reply_markup=main_keyboard())
 
     elif data == "ai":
-        if not HAS_GROQ or not GROQ_KEY:
-            text = ("🤖 Groq AI\n\n"
-                    "❌ غير مفعّل حالياً\n\n"
-                    "لتفعيله أضف في Render:\n"
-                    "Key: `GROQ_KEY`\n"
-                    "Value: مفتاح API من console.groq.com\n\n"
-                    "الحصول على مفتاح مجاني:\n"
-                    "1. روح console.groq.com\n"
-                    "2. سجّل حساب مجاني\n"
-                    "3. أنشئ API Key")
+        if not HAS_GEMINI or not GEMINI_KEY:
+            text = (
+                "🤖 Gemini AI\n\n"
+                "❌ غير مفعّل حالياً\n\n"
+                "أضف في Render Environment Variables:\n"
+                "  Key:   GEMINI_KEY\n"
+                "  Value: مفتاحك من aistudio.google.com\n\n"
+                "خطوات الحصول على مفتاح مجاني:\n"
+                "1. افتح aistudio.google.com\n"
+                "2. سجّل بحساب Google\n"
+                "3. اضغط Get API Key"
+            )
         else:
             try:
                 await query.message.reply_text("⏳ جاري التحليل بالذكاء الاصطناعي...",
@@ -3580,7 +3577,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     sig  = full_analysis(d)
                     text = await claude_analysis(sig)
             except Exception as e:
-                text = f"❌ خطأ في Groq AI: {str(e)}"
+                text = f"❌ خطأ في Gemini AI: {str(e)}"
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
@@ -4328,7 +4325,7 @@ def main():
         return
 
     print("🥇 GOLD MASTER BOT Starting...")
-    print(f"   Groq AI: {'✅' if HAS_GROQ and GROQ_KEY else '❌ (أضف GROQ_KEY)'}")
+    print(f"   Gemini AI: {'✅' if HAS_GEMINI and GEMINI_KEY else '❌ (أضف GEMINI_KEY من aistudio.google.com)'}")
     print(f"   ta library: {'✅' if HAS_TA else '⚠️ (built-in indicators)'}")
 
     app = (ApplicationBuilder()

@@ -3,7 +3,7 @@ requests
 numpy
 pandas
 ta
-groq
+google-generativeai
 matplotlib
 mplfinance
-pymongo[srv]
+pymongo
