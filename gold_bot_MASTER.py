@@ -111,11 +111,7 @@ except ImportError:
     HAS_TA = False
     print("⚠️  ta library not found — using built-in indicators")
 
-try:
-    import google.generativeai as genai
-    HAS_GEMINI = True
-except ImportError:
-    HAS_GEMINI = False
+HAS_OPENROUTER = True  # يعمل بـ requests العادية — لا حاجة لمكتبة خارجية
 
 try:
     from pymongo import MongoClient
@@ -170,8 +166,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1Ow
 # TwelveData API Key — twelvedata.com (free plan: 800 req/day)
 TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e")
 
-# Gemini API Key (مجاني — من aistudio.google.com)
-GEMINI_KEY      = os.getenv("GEMINI_KEY",      "AIzaSyAwKZOQvLYOCGeoqxoirHPTbNw0wqGHLg8")
+# OpenRouter API Key (مجاني — من openrouter.ai)
+OPENROUTER_KEY  = os.getenv("OPENROUTER_KEY", "")
 
 # MongoDB URI (لحفظ الإشارات والإحصائيات)
 MONGODB_URI     = os.getenv("MONGODB_URI",     "mongodb+srv://alaaeldinlool_db_user:97sJMDccaJjmszje@cluster0.oufdfub.mongodb.net/?appName=Cluster0")
@@ -2286,10 +2282,8 @@ async def send_weekly_report(context):
 
         # توقع AI
         ai_text = ""
-        if HAS_GEMINI and GEMINI_KEY:
+        if OPENROUTER_KEY:
             try:
-                genai.configure(api_key=GEMINI_KEY)
-                model  = genai.GenerativeModel("gemini-2.0-flash")
                 prompt = (
                     f"أنت محلل ذهب محترف. بناءً على بيانات هذا الأسبوع:\n"
                     f"التغيير الإجمالي: {report['total_chg']:+.2f}$\n"
@@ -2297,10 +2291,9 @@ async def send_weekly_report(context):
                     f"نطاق الأسبوع: {report['week_range']:.2f}$\n"
                     f"قدم توقعك للأسبوع القادم في 3 جمل بالعربية."
                 )
-                resp     = model.generate_content(prompt)
-                ai_text  = f"\n\n🤖 توقع AI للأسبوع القادم:\n{resp.text}"
+                ai_text = f"\n\n🤖 توقع AI للأسبوع القادم:\n{_openrouter_call(prompt, max_tokens=250)}"
             except Exception as _e:
-                log.warning(f"Gemini weekly error: {_e}")
+                log.warning(f"OpenRouter weekly error: {_e}")
 
         text = fmt_weekly_msg(report, prev) + ai_text
 
@@ -2345,6 +2338,37 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard()
     )
+
+
+
+# ════════════════════════════════════════════════════════════════
+#  OPENROUTER — AI engine (مجاني بدون quota مشكلة)
+# ════════════════════════════════════════════════════════════════
+
+def _openrouter_call(prompt: str, max_tokens: int = 700) -> str:
+    """
+    يستدعي OpenRouter API ويرجع النص.
+    الموديل الافتراضي: mistralai/mistral-7b-instruct (مجاني دائماً).
+    """
+    resp = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_KEY}",
+            "Content-Type":  "application/json",
+            "HTTP-Referer":  "https://goldmasterbot.app",
+            "X-Title":       "Gold Master Bot",
+        },
+        json={
+            "model":      "mistralai/mistral-7b-instruct:free",
+            "messages":   [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.4,
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data["choices"][0]["message"]["content"]
 
 
 # ════════════════════════════════════════════════════════════════
@@ -2589,21 +2613,21 @@ def fmt_astro_msg(price: float) -> str:
 
 
 # ════════════════════════════════════════════════════════════════
-#  GROQ AI ANALYSIS — مدمج مع Gann + فلكي
+#  AI ANALYSIS — مدمج مع Gann + فلكي (OpenRouter)
 # ════════════════════════════════════════════════════════════════
 
 async def claude_analysis(sig: dict) -> str:
-    """تحليل AI شامل: مؤشرات تقنية + Gann + فلكي — يعمل بـ Gemini"""
-    if not HAS_GEMINI or not GEMINI_KEY:
+    """تحليل AI شامل: مؤشرات تقنية + Gann + فلكي — يعمل بـ OpenRouter"""
+    if not OPENROUTER_KEY:
         return (
-            "⚠️ Gemini AI غير مفعّل.\n\n"
-            "أضف في Render Environment Variables:\n"
-            "  Key:   GEMINI_KEY\n"
-            "  Value: مفتاحك من aistudio.google.com\n\n"
+            "⚠️ OpenRouter AI غير مفعّل.\n\n"
+            "أضف في Railway Environment Variables:\n"
+            "  Key:   OPENROUTER_KEY\n"
+            "  Value: مفتاحك من openrouter.ai\n\n"
             "خطوات الحصول على مفتاح مجاني:\n"
-            "1. افتح aistudio.google.com\n"
+            "1. افتح openrouter.ai\n"
             "2. سجّل بحساب Google\n"
-            "3. اضغط Get API Key — انسخه وضعه في Render"
+            "3. اضغط Keys ← Create Key"
         )
     try:
         price = sig.get("price", 0)
@@ -2677,13 +2701,7 @@ ATR: {sig.get('ATR', 0):.2f}
 
 اكتب بالعربية بشكل واضح ومنظم. استخدم الأرقام الدقيقة من البيانات أعلاه."""
 
-        genai.configure(api_key=GEMINI_KEY)
-        model    = genai.GenerativeModel(
-            "gemini-2.0-flash",
-            generation_config={"max_output_tokens": 700, "temperature": 0.4},
-        )
-        response = model.generate_content(prompt)
-        result   = response.text
+        result = _openrouter_call(prompt, max_tokens=700)
 
         bias   = ctx["combined_bias"]
         b_icon = "🔴" if bias == "BEARISH" else "🟢" if bias == "BULLISH" else "🟡"
@@ -2698,7 +2716,7 @@ ATR: {sig.get('ATR', 0):.2f}
 
     except Exception as e:
         log.error(f"claude_analysis error: {e}")
-        return f"⚠️ خطأ في Gemini AI:\n{str(e)[:200]}"
+        return f"⚠️ خطأ في AI:\n{str(e)[:200]}"
 
 # ════════════════════════════════════════════════════════════════
 #  CHART GENERATOR — شارت احترافي بالصورة
@@ -3554,17 +3572,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        reply_markup=main_keyboard())
 
     elif data == "ai":
-        if not HAS_GEMINI or not GEMINI_KEY:
+        if not OPENROUTER_KEY:
             text = (
-                "🤖 Gemini AI\n\n"
+                "🤖 OpenRouter AI\n\n"
                 "❌ غير مفعّل حالياً\n\n"
-                "أضف في Render Environment Variables:\n"
-                "  Key:   GEMINI_KEY\n"
-                "  Value: مفتاحك من aistudio.google.com\n\n"
-                "خطوات الحصول على مفتاح مجاني:\n"
-                "1. افتح aistudio.google.com\n"
+                "أضف في Railway Environment Variables:\n"
+                "  Key:   OPENROUTER_KEY\n"
+                "  Value: مفتاحك من openrouter.ai\n\n"
+                "الحصول على مفتاح مجاني:\n"
+                "1. افتح openrouter.ai\n"
                 "2. سجّل بحساب Google\n"
-                "3. اضغط Get API Key"
+                "3. اضغط Keys ← Create Key"
             )
         else:
             try:
@@ -4325,7 +4343,7 @@ def main():
         return
 
     print("🥇 GOLD MASTER BOT Starting...")
-    print(f"   Gemini AI: {'✅' if HAS_GEMINI and GEMINI_KEY else '❌ (أضف GEMINI_KEY من aistudio.google.com)'}")
+    print(f"   OpenRouter AI: {'✅' if OPENROUTER_KEY else '❌ (أضف OPENROUTER_KEY من openrouter.ai)'}")
     print(f"   ta library: {'✅' if HAS_TA else '⚠️ (built-in indicators)'}")
 
     app = (ApplicationBuilder()
