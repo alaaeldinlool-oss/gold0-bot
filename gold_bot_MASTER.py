@@ -2351,39 +2351,359 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ════════════════════════════════════════════════════════════════
-#  GROQ AI ANALYSIS (مجاني)
+#  ASTRO + GANN TIME ANALYSIS
+# ════════════════════════════════════════════════════════════════
+
+# بيانات الأطوار القمرية لأبريل 2026 (ثابتة — يمكن تحديثها شهرياً)
+LUNAR_PHASES_APR2026 = [
+    {
+        "phase": "بدر كامل",
+        "phase_en": "Full Moon",
+        "date_utc": datetime(2026, 4, 2, 2, 11, tzinfo=timezone.utc),
+        "sign": "الميزان",
+        "degree": "12°21",
+        "impact": "هبوطي",
+        "note": "الميزان برج الذهب — البدر مقابل المريخ يُحدث انعكاسات حادة. تزامن مع انهيار 4,800→4,550.",
+        "gold_bias": "BEARISH",
+    },
+    {
+        "phase": "ربع أخير",
+        "phase_en": "Last Quarter",
+        "date_utc": datetime(2026, 4, 10, 4, 51, tzinfo=timezone.utc),
+        "sign": "الجدي",
+        "degree": "20°20",
+        "impact": "هبوطي مستمر",
+        "note": "الجدي برج زحل — التصحيح والانضباط. يتقاطع مع العمود 96 في Gann 144.",
+        "gold_bias": "BEARISH",
+    },
+    {
+        "phase": "هلال جديد",
+        "phase_en": "New Moon",
+        "date_utc": datetime(2026, 4, 17, 11, 51, tzinfo=timezone.utc),
+        "sign": "الحمل",
+        "degree": "27°28",
+        "impact": "انعكاس صاعد محتمل",
+        "note": "الحمل برج المريخ — بداية وطاقة صاعدة. يتقاطع مع نهاية دورة Gann 132-144.",
+        "gold_bias": "BULLISH",
+    },
+    {
+        "phase": "ربع أول",
+        "phase_en": "1st Quarter",
+        "date_utc": datetime(2026, 4, 24, 2, 31, tzinfo=timezone.utc),
+        "sign": "الأسد",
+        "degree": "3°56",
+        "impact": "صاعد قوي",
+        "note": "الأسد برج الشمس — طاقة صاعدة قوية. يُعزز الانعكاس الذي بدأ عند الهلال.",
+        "gold_bias": "BULLISH",
+    },
+]
+
+# نقاط التحول الزمني Gann لدورة 144 ساعة (بدأت 1 أبريل 2026 مع البدر)
+GANN_144_START = datetime(2026, 4, 1, 10, 11, tzinfo=timezone.utc)
+GANN_144_KEY_COLUMNS = {
+    0:   {"label": "بداية الدورة — قمة/انعكاس",   "bias": "REVERSAL"},
+    24:  {"label": "العمود 24 — ربع الدورة",        "bias": "BEARISH"},
+    48:  {"label": "العمود 48 — البدر/انهيار",      "bias": "BEARISH"},
+    72:  {"label": "العمود 72 — منتصف الدورة",      "bias": "BEARISH"},
+    96:  {"label": "العمود 96 — تسارع أو تحول",    "bias": "REVERSAL"},
+    120: {"label": "العمود 120 — اقتراب القاع",     "bias": "BEARISH"},
+    132: {"label": "العمود 132 — منطقة القاع",      "bias": "SUPPORT"},
+    144: {"label": "نهاية الدورة — انعكاس صاعد",   "bias": "BULLISH"},
+}
+
+# مستويات Gann Square 144 المرئية على الشارت
+GANN_SQUARE_144_LEVELS = [
+    (4800.8,  "0",   "قمة الدورة"),
+    (4789.5,  "6",   "مقاومة 1"),
+    (4778.2,  "12",  "مقاومة 2"),
+    (4766.9,  "18",  "مقاومة 3"),
+    (4755.6,  "24",  "مقاومة 4"),
+    (4744.3,  "30",  "مقاومة 5"),
+    (4735.6,  "36",  "مقاومة رئيسية — Gann 1×1"),
+    (4721.7,  "42",  "مقاومة 7"),
+    (4710.4,  "48",  "مقاومة 8"),
+    (4699.1,  "54",  "مقاومة 9"),
+    (4687.8,  "60",  "منطقة حرجة"),
+    (4676.5,  "66",  "دعم/مقاومة"),
+    (4665.2,  "72",  "دعم منتصف"),
+    (4653.9,  "78",  "دعم"),
+    (4642.6,  "84",  "دعم 2"),
+    (4631.3,  "90",  "دعم 3"),
+    (4620.0,  "96",  "دعم تحول"),
+    (4608.7,  "102", "دعم 4"),
+    (4597.4,  "108", "دعم 5"),
+    (4586.1,  "114", "دعم 6"),
+    (4574.8,  "120", "دعم قوي"),
+    (4563.5,  "126", "دعم 7"),
+    (4556.96, "132", "دعم رئيسي"),
+    (4540.8,  "138", "قرب القاع"),
+    (4529.5,  "144", "قاع الدورة"),
+    (4414.5,  "144", "قاع مطلق الدورة"),
+]
+
+
+def get_astro_context(price: float) -> dict:
+    """
+    يحسب السياق الفلكي والزمني الحالي لـ XAUUSD:
+    - الطور القمري الأقرب (ماضي ومستقبلي)
+    - موضع السعر على دورة Gann 144
+    - أقرب مستوى Gann Square 144
+    - التوقع المدمج
+    """
+    now_utc = datetime.now(timezone.utc)
+
+    # ── 1. الطور القمري الأقرب ──────────────────────────────────
+    past_phase   = None
+    future_phase = None
+    for ph in LUNAR_PHASES_APR2026:
+        if ph["date_utc"] <= now_utc:
+            past_phase = ph
+        elif future_phase is None:
+            future_phase = ph
+
+    # ── 2. موضع دورة Gann 144 ───────────────────────────────────
+    elapsed_hours = (now_utc - GANN_144_START).total_seconds() / 3600
+    current_col   = int(elapsed_hours) % 144
+
+    # أقرب نقطة تحول Gann
+    prev_key = max((c for c in GANN_144_KEY_COLUMNS if c <= current_col), default=0)
+    next_key = min((c for c in GANN_144_KEY_COLUMNS if c > current_col), default=144)
+    hours_to_next = next_key - current_col
+
+    # ── 3. أقرب مستوى Gann Square 144 ──────────────────────────
+    nearest_levels = sorted(
+        GANN_SQUARE_144_LEVELS,
+        key=lambda x: abs(x[0] - price)
+    )[:3]
+
+    # أقرب مستوى دعم وأقرب مستوى مقاومة
+    supports     = [(l, c, d) for l, c, d in GANN_SQUARE_144_LEVELS if l < price]
+    resistances  = [(l, c, d) for l, c, d in GANN_SQUARE_144_LEVELS if l > price]
+    nearest_sup  = max(supports,    key=lambda x: x[0]) if supports    else None
+    nearest_res  = min(resistances, key=lambda x: x[0]) if resistances else None
+
+    # ── 4. التوقع المدمج ────────────────────────────────────────
+    bias_votes = []
+    if past_phase:
+        bias_votes.append(past_phase["gold_bias"])
+    if future_phase and hours_to_next <= 72:
+        bias_votes.append(future_phase["gold_bias"])
+
+    gann_bias = GANN_144_KEY_COLUMNS.get(prev_key, {}).get("bias", "NEUTRAL")
+    if gann_bias in ("BEARISH", "BULLISH"):
+        bias_votes.append(gann_bias)
+
+    bear_count = bias_votes.count("BEARISH")
+    bull_count = bias_votes.count("BULLISH")
+    if bear_count > bull_count:
+        combined_bias = "BEARISH"
+    elif bull_count > bear_count:
+        combined_bias = "BULLISH"
+    else:
+        combined_bias = "NEUTRAL"
+
+    return {
+        "now_utc":        now_utc,
+        "past_phase":     past_phase,
+        "future_phase":   future_phase,
+        "current_col":    current_col,
+        "elapsed_hours":  elapsed_hours,
+        "prev_key":       prev_key,
+        "next_key":       next_key,
+        "hours_to_next":  hours_to_next,
+        "nearest_levels": nearest_levels,
+        "nearest_sup":    nearest_sup,
+        "nearest_res":    nearest_res,
+        "combined_bias":  combined_bias,
+        "bias_votes":     bias_votes,
+    }
+
+
+def fmt_astro_msg(price: float) -> str:
+    """رسالة التحليل الفلكي والزمني للمستخدم"""
+    ctx = get_astro_context(price)
+    lines = [
+        "🌙 التحليل الفلكي والزمني — XAUUSD",
+        f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2",
+        f"💰 السعر: {price:.3f}",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+        "📅 الدورة القمرية",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+
+    if ctx["past_phase"]:
+        ph = ctx["past_phase"]
+        diff_h = (ctx["now_utc"] - ph["date_utc"]).total_seconds() / 3600
+        bias_icon = "🔴" if ph["gold_bias"] == "BEARISH" else "🟢" if ph["gold_bias"] == "BULLISH" else "🟡"
+        lines += [
+            f"✅ آخر طور: {ph['phase']} في {ph['sign']} {ph['degree']}°",
+            f"   منذ {diff_h:.0f} ساعة — تأثير: {bias_icon} {ph['impact']}",
+            f"   {ph['note']}",
+        ]
+
+    if ctx["future_phase"]:
+        ph = ctx["future_phase"]
+        diff_h = (ph["date_utc"] - ctx["now_utc"]).total_seconds() / 3600
+        diff_d = diff_h / 24
+        bias_icon = "🔴" if ph["gold_bias"] == "BEARISH" else "🟢" if ph["gold_bias"] == "BULLISH" else "🟡"
+        lines += [
+            "",
+            f"⏳ الطور القادم: {ph['phase']} في {ph['sign']} {ph['degree']}°",
+            f"   بعد {diff_d:.1f} يوم ({diff_h:.0f} ساعة) — {bias_icon} {ph['impact']}",
+            f"   {ph['note']}",
+        ]
+
+    lines += [
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+        "⬜ دورة Gann 144 ساعة",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"📍 العمود الحالي: {ctx['current_col']} / 144",
+        f"📊 مرحلة: {GANN_144_KEY_COLUMNS.get(ctx['prev_key'], {}).get('label', '—')}",
+        f"⏭ النقطة التالية: العمود {ctx['next_key']} (بعد {ctx['hours_to_next']:.0f} ساعة)",
+        f"   {GANN_144_KEY_COLUMNS.get(ctx['next_key'], {}).get('label', '—')}",
+    ]
+
+    lines += [
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+        "🎯 مستويات Gann Square 144",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+    if ctx["nearest_res"]:
+        l, c, d = ctx["nearest_res"]
+        lines.append(f"📈 مقاومة: {l:.3f} (العمود {c}) — {d}")
+    lines.append(f"   ▶ السعر الحالي: {price:.3f} ◀")
+    if ctx["nearest_sup"]:
+        l, c, d = ctx["nearest_sup"]
+        lines.append(f"📉 دعم:     {l:.3f} (العمود {c}) — {d}")
+
+    bias = ctx["combined_bias"]
+    bias_ar = "هبوطي 🔴" if bias == "BEARISH" else "صاعد 🟢" if bias == "BULLISH" else "محايد 🟡"
+    lines += [
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"🧭 التوقع المدمج: {bias_ar}",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+
+    return "\n".join(lines)
+
+
+# ════════════════════════════════════════════════════════════════
+#  GROQ AI ANALYSIS — مدمج مع Gann + فلكي
 # ════════════════════════════════════════════════════════════════
 
 async def claude_analysis(sig: dict) -> str:
+    """تحليل AI شامل: مؤشرات تقنية + Gann + فلكي"""
     if not HAS_GROQ or not GROQ_KEY:
-        return "⚠️ Groq API غير مفعّل. أضف GROQ_KEY في Render Environment Variables.\nاحصل على Key المجاني من: console.groq.com"
+        return (
+            "⚠️ Groq AI غير مفعّل.\n\n"
+            "أضف في Render Environment Variables:\n"
+            "  Key:   GROQ_KEY\n"
+            "  Value: مفتاحك من console.groq.com\n\n"
+            "الحصول على مفتاح مجاني:\n"
+            "1. افتح console.groq.com\n"
+            "2. سجّل حساب مجاني\n"
+            "3. أنشئ API Key"
+        )
     try:
-        client = Groq(api_key=GROQ_KEY)
-        prompt = f"""أنت محلل ذهب محترف. حلل البيانات التالية وقدم رأيك باختصار بالعربية:
+        price = sig.get("price", 0)
+        ctx   = get_astro_context(price)
 
-السعر: ${sig['price']:.3f}
-الاتجاه: {sig['direction']}
-RSI: {sig['RSI']:.1f}
-MACD: {'صاعد' if sig['MACD']['bull'] else 'هابط'}
-Supertrend: {'صاعد' if sig['st_bull'] else 'هابط'}
-BUY Score: {sig['buyScore']}/12
-SELL Score: {sig['sellScore']}/12
-EMA Stack: {'صاعدة' if sig['ema_bull'] else 'هابطة' if sig['ema_bear'] else 'محايدة'}
+        # ── بناء سياق فلكي نصي ──────────────────────────────────
+        astro_lines = []
+        if ctx["past_phase"]:
+            ph = ctx["past_phase"]
+            diff_h = (ctx["now_utc"] - ph["date_utc"]).total_seconds() / 3600
+            astro_lines.append(
+                f"- آخر طور قمري: {ph['phase']} في {ph['sign']} {ph['degree']}° "
+                f"(منذ {diff_h:.0f} ساعة) — تأثير: {ph['impact']}"
+            )
+        if ctx["future_phase"]:
+            ph = ctx["future_phase"]
+            diff_h = (ph["date_utc"] - ctx["now_utc"]).total_seconds() / 3600
+            astro_lines.append(
+                f"- الطور القمري القادم: {ph['phase']} في {ph['sign']} {ph['degree']}° "
+                f"(بعد {diff_h:.0f} ساعة) — {ph['impact']}"
+            )
 
-قدم:
-1. خلاصة الوضع (3 جمل)
-2. أهم مستويين للمراقبة
-3. توصية واضحة (شراء/بيع/انتظار) مع السبب"""
+        astro_lines.append(
+            f"- دورة Gann 144: العمود الحالي {ctx['current_col']}/144 — "
+            f"{GANN_144_KEY_COLUMNS.get(ctx['prev_key'], {}).get('label', '')}"
+        )
+        astro_lines.append(
+            f"- النقطة الزمنية القادمة: العمود {ctx['next_key']} بعد {ctx['hours_to_next']:.0f} ساعة"
+        )
+        if ctx["nearest_res"]:
+            l, c, d = ctx["nearest_res"]
+            astro_lines.append(f"- أقرب مقاومة Gann Square: {l:.2f} (العمود {c}) — {d}")
+        if ctx["nearest_sup"]:
+            l, c, d = ctx["nearest_sup"]
+            astro_lines.append(f"- أقرب دعم Gann Square:     {l:.2f} (العمود {c}) — {d}")
+        astro_lines.append(
+            f"- التوقع الفلكي المدمج: {ctx['combined_bias']}"
+        )
 
+        astro_context = "\n".join(astro_lines)
+
+        # ── المؤشرات التقنية ────────────────────────────────────
+        prompt = f"""أنت محلل ذهب محترف متخصص في تحليل Gann الزمني والفلكي. \
+حلل الوضع الحالي لـ XAUUSD وقدم تحليلاً مدمجاً شاملاً بالعربية.
+
+═══ المؤشرات التقنية ═══
+السعر الحالي: ${price:.3f}
+الاتجاه: {sig.get('direction', 'NEUTRAL')}
+RSI (14): {sig.get('RSI', 50):.1f}
+MACD: {'صاعد ↑' if sig.get('MACD', {}).get('bull') else 'هابط ↓'}
+Supertrend: {'صاعد ✅' if sig.get('st_bull') else 'هابط ❌'}
+EMA Stack: {'صاعدة' if sig.get('ema_bull') else 'هابطة' if sig.get('ema_bear') else 'محايدة'}
+BUY Score:  {sig.get('buyScore', 0)}/12
+SELL Score: {sig.get('sellScore', 0)}/12
+ATR: {sig.get('ATR', 0):.2f}
+
+═══ التحليل الفلكي وGann الزمني ═══
+{astro_context}
+
+═══ المطلوب ═══
+قدم تحليلاً متكاملاً يشمل:
+1. خلاصة الوضع التقني والفلكي (3-4 جمل)
+2. أهم 3 مستويات للمراقبة (مع الأسباب من Gann وFib)
+3. السيناريو الأرجح مع نسبة الاحتمال (هبوطي/صاعد/تذبذب)
+4. توصية التداول المحددة:
+   - الاتجاه (شراء/بيع/انتظار)
+   - نقطة الدخول
+   - وقف الخسارة
+   - الهدف 1 والهدف 2
+5. التقاطعات الزمنية الحرجة القادمة (Gann + قمري)
+
+اكتب بالعربية بشكل واضح ومنظم. استخدم الأرقام الدقيقة من البيانات أعلاه."""
+
+        client   = Groq(api_key=GROQ_KEY)
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=400,
+            max_tokens=700,
+            temperature=0.4,
         )
         result = response.choices[0].message.content
-        return f"🤖 تحليل Groq AI:\n\n{result}"
+
+        # ── رأس الرسالة ─────────────────────────────────────────
+        bias    = ctx["combined_bias"]
+        b_icon  = "🔴" if bias == "BEARISH" else "🟢" if bias == "BULLISH" else "🟡"
+        header  = (
+            f"🤖 تحليل AI المدمج\n"
+            f"💰 السعر: {price:.3f}  {b_icon} {bias}\n"
+            f"🌙 الطور: {ctx['past_phase']['phase'] if ctx['past_phase'] else '—'}\n"
+            f"⬜ Gann: العمود {ctx['current_col']}/144\n"
+            f"{'─'*28}\n\n"
+        )
+        return header + result
+
     except Exception as e:
-        return f"⚠️ Groq error: {str(e)[:100]}"
+        log.error(f"claude_analysis error: {e}")
+        return f"⚠️ خطأ في Groq AI:\n{str(e)[:200]}"
 
 # ════════════════════════════════════════════════════════════════
 #  CHART GENERATOR — شارت احترافي بالصورة
@@ -2698,7 +3018,10 @@ def main_keyboard():
         ],
         [
             InlineKeyboardButton("🤖 AI تحليل",    callback_data="ai"),
+            InlineKeyboardButton("🌙 فلكي+Gann",   callback_data="astro"),
             InlineKeyboardButton("📊 شارت",         callback_data="chart"),
+        ],
+        [
             InlineKeyboardButton("❓ مساعدة",       callback_data="help"),
         ],
         [
@@ -3224,6 +3547,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
+    elif data == "astro":
+        await query.message.reply_text("⏳ جاري حساب التحليل الفلكي والزمني...",
+                                       reply_markup=main_keyboard())
+        price = get_price_cached()
+        if not price:
+            text = "❌ فشل جلب السعر."
+        else:
+            text = fmt_astro_msg(price)
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                       reply_markup=main_keyboard())
+
     elif data == "ai":
         if not HAS_GROQ or not GROQ_KEY:
             text = ("🤖 Groq AI\n\n"
@@ -3452,6 +3786,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
+
+async def cmd_astro(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/astro — التحليل الفلكي والزمني"""
+    await update.message.reply_text("⏳ جاري حساب التحليل الفلكي والزمني...")
+    price = get_price_cached()
+    if not price:
+        await update.message.reply_text("❌ فشل جلب السعر.", reply_markup=main_keyboard())
+        return
+    text = fmt_astro_msg(price)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
+
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name or "صديقي"
@@ -4007,6 +4352,7 @@ def main():
     app.add_handler(CommandHandler("setalert",  cmd_set_alert))
     app.add_handler(CommandHandler("alerts",    cmd_alerts_list))
     app.add_handler(CommandHandler("ai",        cmd_ai))
+    app.add_handler(CommandHandler("astro",     cmd_astro))
     app.add_handler(CommandHandler("chart",     cmd_chart))
     app.add_handler(CommandHandler("stats",     cmd_stats))
     app.add_handler(CommandHandler("session",      cmd_session))
