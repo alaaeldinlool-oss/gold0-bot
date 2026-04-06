@@ -2348,7 +2348,7 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _openrouter_call(prompt: str, max_tokens: int = 700) -> str:
     """
     يستدعي OpenRouter API ويرجع النص.
-    الموديل الافتراضي: mistralai/mistral-7b-instruct (مجاني دائماً).
+    الموديل الافتراضي: mistralai/mistral-small-3.2-24b-instruct:free (مجاني دائماً).
     """
     resp = requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -2359,7 +2359,7 @@ def _openrouter_call(prompt: str, max_tokens: int = 700) -> str:
             "X-Title":       "Gold Master Bot",
         },
         json={
-            "model":      "mistralai/mistral-7b-instruct:free",
+            "model":      "mistralai/mistral-small-3.2-24b-instruct:free",
             "messages":   [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": 0.4,
@@ -2778,6 +2778,157 @@ def detect_trendlines(highs: list, lows: list, n: int):
                     })
 
     return trendlines
+
+
+def generate_chart(d: dict, sig: dict, tf_label: str = "1H") -> Optional[bytes]:
+    """شارت شموع احترافي مع EMA + RSI + إشارة BUY/SELL"""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        import io
+
+        closes = d['close']
+        opens  = d['open']
+        highs  = d['high']
+        lows   = d['low']
+        n      = len(closes)
+        if n < 10:
+            return None
+
+        # عدد الشموع المعروضة
+        show = min(60, n)
+        idx  = list(range(show))
+        c    = closes[-show:]
+        o    = opens[-show:]
+        h    = highs[-show:]
+        l    = lows[-show:]
+
+        # EMA
+        ema20 = calc_ema(closes, 20)[-show:]
+        ema50 = calc_ema(closes, 50)[-show:]
+
+        # RSI
+        rsi_all = calc_rsi(closes, 14)
+        rsi     = rsi_all[-show:]
+
+        # ── Figure ─────────────────────────────────────────────
+        fig, (ax1, ax2) = plt.subplots(
+            2, 1, figsize=(14, 8),
+            gridspec_kw={'height_ratios': [3, 1]},
+            facecolor='#131722'
+        )
+        ax1.set_facecolor('#131722')
+        ax2.set_facecolor('#131722')
+
+        # ── شموع ────────────────────────────────────────────────
+        for i in range(show):
+            bull   = c[i] >= o[i]
+            color  = '#26a69a' if bull else '#ef5350'
+            # wick
+            ax1.plot([i, i], [l[i], h[i]], color=color, linewidth=0.8, zorder=2)
+            # body
+            body_h = max(abs(c[i] - o[i]), 0.1)
+            rect   = mpatches.FancyBboxPatch(
+                (i - 0.35, min(c[i], o[i])), 0.7, body_h,
+                boxstyle='square,pad=0',
+                facecolor=color, edgecolor=color, linewidth=0, zorder=3
+            )
+            ax1.add_patch(rect)
+
+        # ── EMA ─────────────────────────────────────────────────
+        ax1.plot(idx, ema20, color='#f48fb1', linewidth=1.2,
+                 label='EMA20', zorder=4)
+        ax1.plot(idx, ema50, color='#81d4fa', linewidth=1.2,
+                 label='EMA50', zorder=4)
+
+        # ── إشارة BUY/SELL ──────────────────────────────────────
+        price   = sig.get('price', c[-1])
+        dire    = sig.get('direction', 'NEUTRAL')
+        bs      = sig.get('buyScore',  0)
+        ss      = sig.get('sellScore', 0)
+        atr     = sig.get('ATR', (max(h) - min(l)) / show)
+        if dire == 'BULLISH':
+            ax1.annotate('▲ BUY',
+                         xy=(show - 1, price), xytext=(-6, -20),
+                         textcoords='offset points',
+                         color='#26a69a', fontsize=11, fontweight='bold')
+            ax1.axhline(price - atr,     color='#ef5350', linewidth=0.8,
+                        linestyle='--', alpha=0.7, label=f'SL {price-atr:.1f}')
+            ax1.axhline(price + atr*1.5, color='#26a69a', linewidth=0.8,
+                        linestyle='--', alpha=0.7, label=f'TP1 {price+atr*1.5:.1f}')
+            ax1.axhline(price + atr*3,   color='#00e676', linewidth=0.8,
+                        linestyle=':', alpha=0.7, label=f'TP2 {price+atr*3:.1f}')
+        elif dire == 'BEARISH':
+            ax1.annotate('▼ SELL',
+                         xy=(show - 1, price), xytext=(-6, 8),
+                         textcoords='offset points',
+                         color='#ef5350', fontsize=11, fontweight='bold')
+            ax1.axhline(price + atr,     color='#ef5350', linewidth=0.8,
+                        linestyle='--', alpha=0.7, label=f'SL {price+atr:.1f}')
+            ax1.axhline(price - atr*1.5, color='#26a69a', linewidth=0.8,
+                        linestyle='--', alpha=0.7, label=f'TP1 {price-atr*1.5:.1f}')
+            ax1.axhline(price - atr*3,   color='#00e676', linewidth=0.8,
+                        linestyle=':', alpha=0.7, label=f'TP2 {price-atr*3:.1f}')
+
+        # ── محاور وعنوان ─────────────────────────────────────────
+        price_rng = max(h) - min(l)
+        margin    = price_rng * 0.08
+        ax1.set_xlim(-1, show)
+        ax1.set_ylim(min(l) - margin, max(h) + margin)
+
+        dir_icon  = '🟢' if dire == 'BULLISH' else '🔴' if dire == 'BEARISH' else '🟡'
+        ax1.set_title(
+            f'XAU/USD  [{tf_label}]   {price:,.2f}   {dir_icon} {dire}   '
+            f'BUY {bs}/12  SELL {ss}/12',
+            color='#d4af37', fontsize=11, fontweight='bold', pad=8
+        )
+        ax1.yaxis.set_tick_params(labelcolor='#9e9e9e', labelsize=8)
+        ax1.set_xticks([])
+        ax1.grid(axis='y', color='#1e2130', linewidth=0.5)
+        ax1.legend(loc='upper left', fontsize=7, facecolor='#1e2130',
+                   edgecolor='#333', labelcolor='#ccc', framealpha=0.7)
+        ax1.text(0.01, 0.01, f'Price: {price:,.3f}',
+                 transform=ax1.transAxes, color='#d4af37',
+                 fontsize=9, va='bottom')
+
+        # ── RSI ──────────────────────────────────────────────────
+        ax2.plot(idx, rsi, color='#ce93d8', linewidth=1.2, label='RSI(14)')
+        ax2.axhline(70, color='#ef5350', linewidth=0.7, linestyle='--', alpha=0.6)
+        ax2.axhline(30, color='#26a69a', linewidth=0.7, linestyle='--', alpha=0.6)
+        ax2.axhline(50, color='#555',    linewidth=0.5, linestyle=':',  alpha=0.4)
+        ax2.fill_between(idx, rsi, 70, where=[r > 70 for r in rsi],
+                         color='#ef5350', alpha=0.15)
+        ax2.fill_between(idx, rsi, 30, where=[r < 30 for r in rsi],
+                         color='#26a69a', alpha=0.15)
+        ax2.set_xlim(-1, show)
+        ax2.set_ylim(0, 100)
+        ax2.set_yticks([30, 50, 70])
+        ax2.yaxis.set_tick_params(labelcolor='#9e9e9e', labelsize=8)
+        ax2.set_xticks([])
+        ax2.grid(axis='y', color='#1e2130', linewidth=0.5)
+        ax2.set_ylabel('RSI', color='#9e9e9e', fontsize=8)
+        cur_rsi = rsi[-1]
+        rsi_col = '#ef5350' if cur_rsi > 70 else '#26a69a' if cur_rsi < 30 else '#ce93d8'
+        ax2.text(show - 1, cur_rsi, f' {cur_rsi:.0f}',
+                 color=rsi_col, fontsize=8, va='center')
+
+        # ── وقت ──────────────────────────────────────────────────
+        fig.text(0.99, 0.01, now_local().strftime('%Y-%m-%d %H:%M GMT+2'),
+                 ha='right', color='#555', fontsize=7)
+
+        plt.tight_layout(pad=0.5)
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=120,
+                    bbox_inches='tight', facecolor='#131722')
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
+
+    except Exception as e:
+        log.error(f"generate_chart error: {e}")
+        return None
 
 
 def generate_weekly_chart(report: dict) -> Optional[bytes]:
