@@ -2432,44 +2432,147 @@ GANN_144_KEY_COLUMNS = {
     144: {"label": "نهاية الدورة — انعكاس صاعد",   "bias": "BULLISH"},
 }
 
-# مستويات Gann Square 144 المرئية على الشارت
-GANN_SQUARE_144_LEVELS = [
-    (4800.8,  "0",   "قمة الدورة"),
-    (4789.5,  "6",   "مقاومة 1"),
-    (4778.2,  "12",  "مقاومة 2"),
-    (4766.9,  "18",  "مقاومة 3"),
-    (4755.6,  "24",  "مقاومة 4"),
-    (4744.3,  "30",  "مقاومة 5"),
-    (4735.6,  "36",  "مقاومة رئيسية — Gann 1×1"),
-    (4721.7,  "42",  "مقاومة 7"),
-    (4710.4,  "48",  "مقاومة 8"),
-    (4699.1,  "54",  "مقاومة 9"),
-    (4687.8,  "60",  "منطقة حرجة"),
-    (4676.5,  "66",  "دعم/مقاومة"),
-    (4665.2,  "72",  "دعم منتصف"),
-    (4653.9,  "78",  "دعم"),
-    (4642.6,  "84",  "دعم 2"),
-    (4631.3,  "90",  "دعم 3"),
-    (4620.0,  "96",  "دعم تحول"),
-    (4608.7,  "102", "دعم 4"),
-    (4597.4,  "108", "دعم 5"),
-    (4586.1,  "114", "دعم 6"),
-    (4574.8,  "120", "دعم قوي"),
-    (4563.5,  "126", "دعم 7"),
-    (4556.96, "132", "دعم رئيسي"),
-    (4540.8,  "138", "قرب القاع"),
-    (4529.5,  "144", "قاع الدورة"),
-    (4414.5,  "144", "قاع مطلق الدورة"),
-]
+# ════════════════════════════════════════════════════════════════
+#  GANN SQUARE 144 — حساب ديناميكي مطابق للكود الأصلي (Pine Script)
+# ════════════════════════════════════════════════════════════════
 
-
-def get_astro_context(price: float) -> dict:
+def calc_gann_square_144_levels(upper_price: float, lower_price: float) -> list:
     """
-    يحسب السياق الفلكي والزمني الحالي لـ XAUUSD:
-    - الطور القمري الأقرب (ماضي ومستقبلي)
-    - موضع السعر على دورة Gann 144
-    - أقرب مستوى Gann Square 144
-    - التوقع المدمج
+    يحسب مستويات Gann Square 144 بنفس منطق الكود الأصلي:
+      price(row) = upperPrice - (upperPrice - lowerPrice) / 144 * row
+    يرجع قائمة من (row, price, label)
+    """
+    levels = []
+    price_range = upper_price - lower_price
+    # كل 6 صفوف = خط شبكة مرئي (buildAxis تطلع كل 6)
+    for row in range(0, 145, 6):
+        price = upper_price - price_range / 144 * row
+        # تحديد التسمية بناءً على أهمية الصف في Gann
+        if row == 0:
+            label = "قمة الدورة (0)"
+        elif row == 144:
+            label = "قاع الدورة (144)"
+        elif row == 36:
+            label = "مقاومة رئيسية (36) — خط أحمر"
+        elif row == 72:
+            label = "منتصف الدورة (72) — محوري"
+        elif row == 108:
+            label = "دعم رئيسي (108) — خط أحمر"
+        elif row == 48:
+            label = "نقطة تحول (48) — خط أحمر"
+        elif row == 96:
+            label = "نقطة تحول (96) — خط أحمر"
+        elif row == 126:
+            label = "دعم (126) — خط أحمر"
+        else:
+            label = f"السطر {row}"
+        levels.append((row, round(price, 3), label))
+    return levels
+
+
+def get_gann_square_144(d: dict) -> dict:
+    """
+    يحسب Gann Square 144 الديناميكي من بيانات OHLCV:
+    - upperPrice = highest(144/2 = 72 شمعة)
+    - lowerPrice = lowest(72 شمعة)
+    مطابق لـ autoPricesAndBar=true في الكود الأصلي
+    """
+    closes = d.get("close", [])
+    highs  = d.get("high",  [])
+    lows   = d.get("low",   [])
+    n = len(closes)
+    if n < 10:
+        return {}
+
+    # نفس منطق Pine Script: highest/lowest آخر 72 شمعة (144/2)
+    lookback    = min(72, n)
+    upper_price = max(highs[-lookback:])
+    lower_price = min(lows[-lookback:])
+    price_range = upper_price - lower_price
+    current     = closes[-1]
+
+    if price_range <= 0:
+        return {}
+
+    # احسب كل مستويات الـ 144
+    levels = calc_gann_square_144_levels(upper_price, lower_price)
+
+    # إيجاد الصف الحالي للسعر
+    current_row = round((upper_price - current) / price_range * 144)
+    current_row = max(0, min(144, current_row))
+
+    # أقرب صف مقاومة وأقرب صف دعم
+    sup_levels = [(r, p, l) for r, p, l in levels if p < current]
+    res_levels = [(r, p, l) for r, p, l in levels if p > current]
+    nearest_sup = max(sup_levels, key=lambda x: x[1]) if sup_levels else None
+    nearest_res = min(res_levels, key=lambda x: x[1]) if res_levels else None
+
+    # أهم المستويات (الصفوف الحرجة: 0,36,48,72,96,108,126,144)
+    key_rows    = {0, 36, 48, 72, 96, 108, 126, 144}
+    key_levels  = [(r, p, l) for r, p, l in levels if r in key_rows]
+
+    return {
+        "upper":        upper_price,
+        "lower":        lower_price,
+        "range":        price_range,
+        "current":      current,
+        "current_row":  current_row,
+        "levels":       levels,
+        "key_levels":   key_levels,
+        "nearest_sup":  nearest_sup,
+        "nearest_res":  nearest_res,
+    }
+
+
+def fmt_gann_square_144_msg(d: dict, price: float) -> str:
+    """رسالة Gann Square 144 الديناميكية الكاملة"""
+    g = get_gann_square_144(d)
+    if not g:
+        return "❌ بيانات غير كافية لحساب Gann Square 144"
+
+    lines = [
+        "⬜ GANN SQUARE OF 144 — ديناميكي",
+        f"💰 السعر: {price:.3f}",
+        f"📈 أعلى سعر (72 شمعة): {g['upper']:.3f}",
+        f"📉 أدنى سعر (72 شمعة): {g['lower']:.3f}",
+        f"📏 النطاق: {g['range']:.3f}",
+        f"📍 الصف الحالي: {g['current_row']} / 144",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+        "🔑 المستويات الحرجة:",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+    for row, p, lbl in g["key_levels"]:
+        arrow = " ◄ أنت هنا" if abs(p - price) < g["range"] * 0.02 else ""
+        marker = "▲" if p > price else "▼"
+        lines.append(f"  {marker} {lbl}: {p:.3f}{arrow}")
+
+    lines += [
+        "",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+        "🎯 أقرب مستويات:",
+        "━━━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+    if g["nearest_res"]:
+        r, p, l = g["nearest_res"]
+        lines.append(f"  📈 مقاومة: {p:.3f} (صف {r}) — {l}  +{p-price:.1f}$")
+    lines.append(f"  ▶ السعر: {price:.3f} (صف {g['current_row']})")
+    if g["nearest_sup"]:
+        r, p, l = g["nearest_sup"]
+        lines.append(f"  📉 دعم:    {p:.3f} (صف {r}) — {l}  -{price-p:.1f}$")
+
+    lines += [
+        "",
+        f"🕐 {now_local().strftime('%H:%M:%S')} GMT+2",
+    ]
+    return "\n".join(lines)
+
+
+
+def get_astro_context(price: float, d: dict = None) -> dict:
+    """
+    يحسب السياق الفلكي والزمني الحالي لـ XAUUSD.
+    إذا أُعطيت بيانات OHLCV يحسب Gann Square 144 ديناميكياً.
     """
     now_utc = datetime.now(timezone.utc)
 
@@ -2486,22 +2589,15 @@ def get_astro_context(price: float) -> dict:
     elapsed_hours = (now_utc - GANN_144_START).total_seconds() / 3600
     current_col   = int(elapsed_hours) % 144
 
-    # أقرب نقطة تحول Gann
     prev_key = max((c for c in GANN_144_KEY_COLUMNS if c <= current_col), default=0)
-    next_key = min((c for c in GANN_144_KEY_COLUMNS if c > current_col), default=144)
+    next_key = min((c for c in GANN_144_KEY_COLUMNS if c >  current_col), default=144)
     hours_to_next = next_key - current_col
 
-    # ── 3. أقرب مستوى Gann Square 144 ──────────────────────────
-    nearest_levels = sorted(
-        GANN_SQUARE_144_LEVELS,
-        key=lambda x: abs(x[0] - price)
-    )[:3]
-
-    # أقرب مستوى دعم وأقرب مستوى مقاومة
-    supports     = [(l, c, d) for l, c, d in GANN_SQUARE_144_LEVELS if l < price]
-    resistances  = [(l, c, d) for l, c, d in GANN_SQUARE_144_LEVELS if l > price]
-    nearest_sup  = max(supports,    key=lambda x: x[0]) if supports    else None
-    nearest_res  = min(resistances, key=lambda x: x[0]) if resistances else None
+    # ── 3. Gann Square 144 ديناميكي ─────────────────────────────
+    gann_sq = get_gann_square_144(d) if d else {}
+    nearest_sup = gann_sq.get("nearest_sup")
+    nearest_res = gann_sq.get("nearest_res")
+    current_row = gann_sq.get("current_row", current_col)
 
     # ── 4. التوقع المدمج ────────────────────────────────────────
     bias_votes = []
@@ -2509,19 +2605,14 @@ def get_astro_context(price: float) -> dict:
         bias_votes.append(past_phase["gold_bias"])
     if future_phase and hours_to_next <= 72:
         bias_votes.append(future_phase["gold_bias"])
-
     gann_bias = GANN_144_KEY_COLUMNS.get(prev_key, {}).get("bias", "NEUTRAL")
     if gann_bias in ("BEARISH", "BULLISH"):
         bias_votes.append(gann_bias)
 
     bear_count = bias_votes.count("BEARISH")
     bull_count = bias_votes.count("BULLISH")
-    if bear_count > bull_count:
-        combined_bias = "BEARISH"
-    elif bull_count > bear_count:
-        combined_bias = "BULLISH"
-    else:
-        combined_bias = "NEUTRAL"
+    combined_bias = "BEARISH" if bear_count > bull_count else \
+                    "BULLISH" if bull_count > bear_count else "NEUTRAL"
 
     return {
         "now_utc":        now_utc,
@@ -2532,17 +2623,19 @@ def get_astro_context(price: float) -> dict:
         "prev_key":       prev_key,
         "next_key":       next_key,
         "hours_to_next":  hours_to_next,
-        "nearest_levels": nearest_levels,
+        "current_row":    current_row,
         "nearest_sup":    nearest_sup,
         "nearest_res":    nearest_res,
+        "gann_sq":        gann_sq,
         "combined_bias":  combined_bias,
         "bias_votes":     bias_votes,
     }
 
 
-def fmt_astro_msg(price: float) -> str:
-    """رسالة التحليل الفلكي والزمني للمستخدم"""
-    ctx = get_astro_context(price)
+def fmt_astro_msg(price: float, d: dict = None) -> str:
+    """رسالة التحليل الفلكي والزمني للمستخدم — مع Gann Square 144 ديناميكي"""
+    ctx = get_astro_context(price, d)
+    g   = ctx.get("gann_sq", {})
     lines = [
         "🌙 التحليل الفلكي والزمني — XAUUSD",
         f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2",
@@ -2589,16 +2682,35 @@ def fmt_astro_msg(price: float) -> str:
     lines += [
         "",
         "━━━━━━━━━━━━━━━━━━━━━━━━",
-        "🎯 مستويات Gann Square 144",
+        "🎯 Gann Square 144 — ديناميكي",
         "━━━━━━━━━━━━━━━━━━━━━━━━",
     ]
-    if ctx["nearest_res"]:
-        l, c, d = ctx["nearest_res"]
-        lines.append(f"📈 مقاومة: {l:.3f} (العمود {c}) — {d}")
-    lines.append(f"   ▶ السعر الحالي: {price:.3f} ◀")
-    if ctx["nearest_sup"]:
-        l, c, d = ctx["nearest_sup"]
-        lines.append(f"📉 دعم:     {l:.3f} (العمود {c}) — {d}")
+    if g:
+        lines.append(f"📈 أعلى: {g['upper']:.3f}  |  📉 أدنى: {g['lower']:.3f}")
+        lines.append(f"📍 الصف الحالي للسعر: {g.get('current_row', '—')} / 144")
+        lines.append("")
+        # عرض المستويات الحرجة
+        for row, p, lbl in g.get("key_levels", []):
+            arrow = " ◄◄" if abs(p - price) < g["range"] * 0.015 else ""
+            marker = "▲" if p > price else "▼"
+            diff = abs(p - price)
+            lines.append(f"  {marker} {p:.3f} [{row:3d}] {lbl}{arrow}  ({diff:.1f}$)")
+        lines.append("")
+        if ctx["nearest_res"]:
+            r, p, lbl = ctx["nearest_res"]
+            lines.append(f"📈 أقرب مقاومة: {p:.3f} (صف {r})  +{p-price:.1f}$")
+        lines.append(f"   ▶ السعر: {price:.3f} (صف {g.get('current_row','—')}) ◀")
+        if ctx["nearest_sup"]:
+            r, p, lbl = ctx["nearest_sup"]
+            lines.append(f"📉 أقرب دعم:    {p:.3f} (صف {r})  -{price-p:.1f}$")
+    else:
+        if ctx["nearest_res"]:
+            r, p, lbl = ctx["nearest_res"]
+            lines.append(f"📈 مقاومة: {p:.3f} (صف {r}) — {lbl}")
+        lines.append(f"   ▶ السعر الحالي: {price:.3f} ◀")
+        if ctx["nearest_sup"]:
+            r, p, lbl = ctx["nearest_sup"]
+            lines.append(f"📉 دعم:    {p:.3f} (صف {r}) — {lbl}")
 
     bias = ctx["combined_bias"]
     bias_ar = "هبوطي 🔴" if bias == "BEARISH" else "صاعد 🟢" if bias == "BULLISH" else "محايد 🟡"
@@ -2631,7 +2743,9 @@ async def claude_analysis(sig: dict) -> str:
         )
     try:
         price = sig.get("price", 0)
-        ctx   = get_astro_context(price)
+        # جلب بيانات H1 للحساب الديناميكي
+        _d_for_gann = fetch_ohlcv_cached("1h", 200) or {}
+        ctx   = get_astro_context(price, _d_for_gann)
 
         # ── بناء سياق فلكي نصي ──────────────────────────────────
         astro_lines = []
@@ -3569,28 +3683,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        reply_markup=main_keyboard())
 
     elif data == "gann_square":
-        await query.message.reply_text("⏳ جاري حساب Gann Square...",
+        await query.message.reply_text("⏳ جاري حساب Gann Square 144...",
                                        reply_markup=main_keyboard())
         price = get_price_cached()
+        d     = fetch_ohlcv_cached("1h", 200)
         if not price:
             text = "❌ فشل جلب السعر."
+        elif not d:
+            text = "❌ فشل جلب البيانات."
         else:
-            g = calc_gann_square(price)
-            lines = [
-                f"⬜ GANN SQUARE OF NINE",
-                f"السعر: {price:.2f}  |  الجذر: {g['root']}",
-                "",
-                "📈 مقاومة:",
-            ]
-            for r in g['resistance']:
-                diff = r['level'] - price
-                lines.append(f"  ▲ {r['level']:.2f}  ({r['angle']})  +{diff:.2f}$")
-            lines.append("")
-            lines.append("📉 دعم:")
-            for s in g['support']:
-                diff = price - s['level']
-                lines.append(f"  ▼ {s['level']:.2f}  ({s['angle']})  -{diff:.2f}$")
-            text = '\n'.join(lines)
+            text = fmt_gann_square_144_msg(d, price)
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
@@ -3718,7 +3820,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not price:
             text = "❌ فشل جلب السعر."
         else:
-            text = fmt_astro_msg(price)
+            _d = fetch_ohlcv_cached("1h", 200) or {}
+            text = fmt_astro_msg(price, _d)
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
@@ -3954,13 +4057,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        reply_markup=main_keyboard())
 
 async def cmd_astro(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/astro — التحليل الفلكي والزمني"""
+    """/astro — التحليل الفلكي والزمني مع Gann Square 144 ديناميكي"""
     await update.message.reply_text("⏳ جاري حساب التحليل الفلكي والزمني...")
     price = get_price_cached()
     if not price:
         await update.message.reply_text("❌ فشل جلب السعر.", reply_markup=main_keyboard())
         return
-    text = fmt_astro_msg(price)
+    d    = fetch_ohlcv_cached("1h", 200) or {}
+    text = fmt_astro_msg(price, d)
     await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
 
 
