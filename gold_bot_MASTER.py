@@ -167,7 +167,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1Ow
 TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e")
 
 # OpenRouter API Key (مجاني — من openrouter.ai)
-OPENROUTER_KEY  = os.getenv("OPENROUTER_KEY", "")
+OPENROUTER_KEY  = os.getenv("OPENROUTER_KEY", "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")
 
 # MongoDB URI (لحفظ الإشارات والإحصائيات)
 MONGODB_URI     = os.getenv("MONGODB_URI",     "mongodb+srv://alaaeldinlool_db_user:97sJMDccaJjmszje@cluster0.oufdfub.mongodb.net/?appName=Cluster0")
