@@ -166,8 +166,14 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1Ow
 # TwelveData API Key — twelvedata.com (free plan: 800 req/day)
 TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e")
 
-# OpenRouter API Key (مجاني — من openrouter.ai)
-OPENROUTER_KEY  = os.getenv("OPENROUTER_KEY", "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")
+# OpenRouter API Key (fallback)
+OPENROUTER_KEY  = os.getenv("OPENROUTER_KEY", "")
+
+# Cohere API Key (مجاني — من dashboard.cohere.com)
+COHERE_KEY_DEFAULT = os.getenv("COHERE_KEY", "0xoiLo7FMswnN5KZd5nK98Q4wiRZBBdNbZXMnyei")
+
+# Hugging Face API Key (مجاني — من huggingface.co/settings/tokens)
+HF_KEY_DEFAULT  = os.getenv("HF_KEY", "")
 
 # MongoDB URI (لحفظ الإشارات والإحصائيات)
 MONGODB_URI     = os.getenv("MONGODB_URI",     "mongodb+srv://alaaeldinlool_db_user:97sJMDccaJjmszje@cluster0.oufdfub.mongodb.net/?appName=Cluster0")
@@ -2291,7 +2297,7 @@ async def send_weekly_report(context):
                     f"نطاق الأسبوع: {report['week_range']:.2f}$\n"
                     f"قدم توقعك للأسبوع القادم في 3 جمل بالعربية."
                 )
-                ai_text = f"\n\n🤖 توقع AI للأسبوع القادم:\n{_openrouter_call(prompt, max_tokens=250)}"
+                ai_text = f"\n\n🤖 توقع AI للأسبوع القادم:\n{_ai_call(prompt, max_tokens=250)}"
             except Exception as _e:
                 log.warning(f"OpenRouter weekly error: {_e}")
 
@@ -2342,33 +2348,99 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ════════════════════════════════════════════════════════════════
-#  OPENROUTER — AI engine (مجاني بدون quota مشكلة)
+#  AI ENGINE — Hugging Face Inference API (مجاني بدون قيود)
 # ════════════════════════════════════════════════════════════════
 
-def _openrouter_call(prompt: str, max_tokens: int = 700) -> str:
+# ════════════════════════════════════════════════════════════════
+#  AI ENGINE — Cohere (أولوية) + HF + OpenRouter (fallback)
+# ════════════════════════════════════════════════════════════════
+
+def _ai_call(prompt: str, max_tokens: int = 700) -> str:
     """
-    يستدعي OpenRouter API ويرجع النص.
-    الموديل الافتراضي: mistralai/mistral-small-3.2-24b-instruct:free (مجاني دائماً).
+    يستدعي AI API بالترتيب:
+    1. Cohere (مجاني — dashboard.cohere.com)
+    2. Hugging Face (مجاني — huggingface.co)
+    3. OpenRouter (fallback)
     """
-    resp = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
-            "Content-Type":  "application/json",
-            "HTTP-Referer":  "https://goldmasterbot.app",
-            "X-Title":       "Gold Master Bot",
-        },
-        json={
-            "model":      "mistralai/mistral-small-3.2-24b-instruct:free",
-            "messages":   [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-            "temperature": 0.4,
-        },
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    errors = []
+
+    # ── 1. Cohere ────────────────────────────────────────────
+    cohere_key = os.getenv("COHERE_KEY", COHERE_KEY_DEFAULT)
+    if cohere_key:
+        try:
+            resp = requests.post(
+                "https://api.cohere.com/v2/chat",
+                headers={
+                    "Authorization": f"Bearer {cohere_key}",
+                    "Content-Type":  "application/json",
+                },
+                json={
+                    "model":       "command-r-plus-08-2024",
+                    "messages":    [{"role": "user", "content": prompt}],
+                    "max_tokens":  max_tokens,
+                    "temperature": 0.4,
+                },
+                timeout=40,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["message"]["content"][0]["text"]
+        except Exception as e:
+            errors.append(f"Cohere: {e}")
+            log.warning(f"Cohere error: {e}")
+
+    # ── 2. Hugging Face ──────────────────────────────────────
+    hf_key = os.getenv("HF_KEY", HF_KEY_DEFAULT)
+    if hf_key:
+        try:
+            resp = requests.post(
+                "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-72B-Instruct/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {hf_key}",
+                    "Content-Type":  "application/json",
+                },
+                json={
+                    "model":       "Qwen/Qwen2.5-72B-Instruct",
+                    "messages":    [{"role": "user", "content": prompt}],
+                    "max_tokens":  max_tokens,
+                    "temperature": 0.4,
+                    "stream":      False,
+                },
+                timeout=40,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+        except Exception as e:
+            errors.append(f"HF: {e}")
+            log.warning(f"HF error: {e}")
+
+    # ── 3. OpenRouter ────────────────────────────────────────
+    or_key = os.getenv("OPENROUTER_KEY", OPENROUTER_KEY)
+    if or_key:
+        try:
+            resp = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {or_key}",
+                    "Content-Type":  "application/json",
+                    "HTTP-Referer":  "https://goldmasterbot.app",
+                    "X-Title":       "Gold Master Bot",
+                },
+                json={
+                    "model":       "mistralai/mistral-small-3.2-24b-instruct:free",
+                    "messages":    [{"role": "user", "content": prompt}],
+                    "max_tokens":  max_tokens,
+                    "temperature": 0.4,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+        except Exception as e:
+            errors.append(f"OpenRouter: {e}")
+            log.warning(f"OpenRouter error: {e}")
+
+    raise ValueError(f"كل AI engines فشلت: {' | '.join(errors)}")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -2729,17 +2801,21 @@ def fmt_astro_msg(price: float, d: dict = None) -> str:
 # ════════════════════════════════════════════════════════════════
 
 async def claude_analysis(sig: dict) -> str:
-    """تحليل AI شامل: مؤشرات تقنية + Gann + فلكي — يعمل بـ OpenRouter"""
-    if not OPENROUTER_KEY:
+    """تحليل AI شامل: مؤشرات تقنية + Gann + فلكي"""
+    hf_key     = os.getenv("HF_KEY", HF_KEY_DEFAULT)
+    or_key     = os.getenv("OPENROUTER_KEY", OPENROUTER_KEY)
+    cohere_key = os.getenv("COHERE_KEY", COHERE_KEY_DEFAULT)
+    if not hf_key and not or_key and not cohere_key:
         return (
-            "⚠️ OpenRouter AI غير مفعّل.\n\n"
-            "أضف في Railway Environment Variables:\n"
-            "  Key:   OPENROUTER_KEY\n"
-            "  Value: مفتاحك من openrouter.ai\n\n"
-            "خطوات الحصول على مفتاح مجاني:\n"
-            "1. افتح openrouter.ai\n"
+            "⚠️ AI غير مفعّل.\n\n"
+            "أضف في Railway → Variables:\n"
+            "  Key:   COHERE_KEY\n"
+            "  Value: مفتاحك من dashboard.cohere.com\n\n"
+            "خطوات (دقيقتين):\n"
+            "1. افتح dashboard.cohere.com\n"
             "2. سجّل بحساب Google\n"
-            "3. اضغط Keys ← Create Key"
+            "3. API Keys → انسخ Trial Key\n"
+            "4. ضعه في Railway"
         )
     try:
         price = sig.get("price", 0)
@@ -2815,7 +2891,7 @@ ATR: {sig.get('ATR', 0):.2f}
 
 اكتب بالعربية بشكل واضح ومنظم. استخدم الأرقام الدقيقة من البيانات أعلاه."""
 
-        result = _openrouter_call(prompt, max_tokens=700)
+        result = _ai_call(prompt, max_tokens=700)
 
         bias   = ctx["combined_bias"]
         b_icon = "🔴" if bias == "BEARISH" else "🟢" if bias == "BULLISH" else "🟡"
@@ -3826,17 +3902,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        reply_markup=main_keyboard())
 
     elif data == "ai":
-        if not OPENROUTER_KEY:
+        _hf  = os.getenv("HF_KEY", HF_KEY_DEFAULT)
+        _or  = os.getenv("OPENROUTER_KEY", OPENROUTER_KEY)
+        if not _hf and not _or:
             text = (
-                "🤖 OpenRouter AI\n\n"
+                "🤖 Gold Master AI\n\n"
                 "❌ غير مفعّل حالياً\n\n"
-                "أضف في Railway Environment Variables:\n"
-                "  Key:   OPENROUTER_KEY\n"
-                "  Value: مفتاحك من openrouter.ai\n\n"
-                "الحصول على مفتاح مجاني:\n"
-                "1. افتح openrouter.ai\n"
-                "2. سجّل بحساب Google\n"
-                "3. اضغط Keys ← Create Key"
+                "أضف في Railway → Variables:\n"
+                "  Key:   HF_KEY\n"
+                "  Value: مفتاحك من huggingface.co\n\n"
+                "خطوات:\n"
+                "1. huggingface.co → Settings\n"
+                "2. Access Tokens → New Token\n"
+                "3. Read → انسخ وضع في Railway"
             )
         else:
             try:
@@ -4598,7 +4676,9 @@ def main():
         return
 
     print("🥇 GOLD MASTER BOT Starting...")
-    print(f"   OpenRouter AI: {'✅' if OPENROUTER_KEY else '❌ (أضف OPENROUTER_KEY من openrouter.ai)'}")
+    _hf_ok = bool(os.getenv("HF_KEY", HF_KEY_DEFAULT))
+    _or_ok = bool(os.getenv("OPENROUTER_KEY", OPENROUTER_KEY))
+    print(f"   AI Engine: {'✅ HF' if _hf_ok else ''}{'✅ OR' if _or_ok else ''}{'❌ أضف HF_KEY من huggingface.co' if not _hf_ok and not _or_ok else ''}")
     print(f"   ta library: {'✅' if HAS_TA else '⚠️ (built-in indicators)'}")
 
     app = (ApplicationBuilder()
