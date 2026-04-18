@@ -1388,9 +1388,9 @@ def get_triple_analysis() -> dict:
         except Exception as e:
             log.warning(f"stooq DXY error: {e}")
 
-        # المصدر الثاني: احسب DXY من الصيغة الحقيقية
-        # DXY = 50.14348112 × EUR/USD^-0.576 × USD/JPY^0.136 × GBP/USD^-0.119
-        #       × USD/CAD^0.091 × USD/SEK^0.042 × USD/CHF^0.036
+        # المصدر الثاني: احسب DXY من الصيغة الحقيقية مع normalization
+        # ICE DXY = 50.14348112 × EUR^-0.576 × JPY^0.136 × GBP^-0.119 × CAD^0.091 × CHF^0.036
+        # الصيغة بتدي ~90-91 بدل ~98-99 — محتاجين factor تصحيح = 1.092
         if not dxy_closes or dxy_closes[-1] < 50:
             try:
                 pairs = {
@@ -1420,11 +1420,13 @@ def get_triple_analysis() -> dict:
                         for key, (closes, exp) in basket_data.items():
                             if i < len(closes):
                                 val *= (closes[i] ** exp)
-                        dxy_calc.append(round(val, 3))
-                    if dxy_calc and 80 < dxy_calc[-1] < 130:
+                        # normalization factor عشان نوصل للـ range الصح (~95-105)
+                        val = round(val * 1.092, 3)
+                        dxy_calc.append(val)
+                    if dxy_calc and 85 < dxy_calc[-1] < 120:
                         dxy_closes = dxy_calc
                         dxy_label  = 'DXY (محسوب)'
-                        log.info(f"DXY calculated: {dxy_closes[-1]:.2f}")
+                        log.info(f"DXY calculated+normalized: {dxy_closes[-1]:.2f}")
             except Exception as e:
                 log.warning(f"DXY formula error: {e}")
 
@@ -1539,31 +1541,34 @@ def generate_triple_chart(data: dict) -> Optional[bytes]:
         # ── الذهب ──
         ax1 = fig.add_subplot(gs[0])
         g_d = gold[-n:]
+        g_chg = f"{'+' if data['gold_chg']>=0 else ''}{data['gold_chg']:.2f}%"
         plot_line(ax1, x, g_d, '#ffd700', 'XAU/USD $',
-                  f"Gold  {data['gold_now']:.2f}$  ({'+' if data['gold_chg']>=0 else ''}{data['gold_chg']:.2f}%)")
+                  f"Gold  {data['gold_now']:.2f}$  ({g_chg})")
 
         # ── USD/EGP ──
         ax2 = fig.add_subplot(gs[1])
         e_d = egp[-n:]
         xn2 = list(range(len(e_d)))
+        e_chg = f"{'+' if data['egp_chg']>=0 else ''}{data['egp_chg']:.2f}%"
         plot_line(ax2, xn2, e_d, '#00d4aa', 'USD/EGP',
-                  f"USD/EGP  {data['egp_now']:.2f} جنيه  ({'+' if data['egp_chg']>=0 else ''}{data['egp_chg']:.2f}%)")
+                  f"USD/EGP  {data['egp_now']:.2f} EGP  ({e_chg})")
 
         # ── DXY ──
         if has_dxy:
             ax3 = fig.add_subplot(gs[2])
             d_d = dxy[-n:]
             xn3 = list(range(len(d_d)))
-            dxy_lbl = data.get('dxy_label', 'DXY')
+            dxy_lbl = data.get('dxy_label', 'DXY').replace('محسوب', 'calc').replace('اتجاه الدولار', 'USD trend')
+            d_chg = f"{'+' if data['dxy_chg']>=0 else ''}{data['dxy_chg']:.2f}%"
             plot_line(ax3, xn3, d_d, '#ff6b6b', dxy_lbl,
-                      f"{dxy_lbl}  {data['dxy_now']:.2f}  ({'+' if data['dxy_chg']>=0 else ''}{data['dxy_chg']:.2f}%)")
+                      f"{dxy_lbl}  {data['dxy_now']:.2f}  ({d_chg})")
             corr_ax = fig.add_subplot(gs[3])
         else:
             corr_ax = fig.add_subplot(gs[2])
 
         # ── الارتباطات ──
         corr_ax.set_facecolor('#16213e')
-        labels = ['ذهب/جنيه', 'ذهب/DXY', 'جنيه/DXY']
+        labels = ['Gold/EGP', 'Gold/DXY', 'EGP/DXY']
         corrs  = [data['corr_gold_egp'], data['corr_gold_dxy'], data['corr_egp_dxy']]
         colors = ['#ffd700' if c >= 0 else '#ff4757' for c in corrs]
         bars   = corr_ax.bar(labels, corrs, color=colors, width=0.5, zorder=2)
@@ -1572,14 +1577,14 @@ def generate_triple_chart(data: dict) -> Optional[bytes]:
         corr_ax.set_ylabel('Corr', color='#aaaaaa', fontsize=8)
         corr_ax.tick_params(colors='#e0e0e0', labelsize=8)
         corr_ax.grid(axis='y', color='#2a2a4a', alpha=0.4)
-        corr_ax.set_title('الارتباط (آخر 30 يوم)', color='#e0e0e0', fontsize=9)
+        corr_ax.set_title('Correlation (last 30 days)', color='#e0e0e0', fontsize=9)
         for bar, c in zip(bars, corrs):
             corr_ax.text(bar.get_x() + bar.get_width()/2,
                          c + (0.06 if c >= 0 else -0.12),
                          f'{c:+.3f}', ha='center', color='#ffffff',
                          fontsize=8, fontweight='bold')
 
-        fig.text(0.5, 0.01, f"{lbl_start}  ←  {lbl_end}",
+        fig.text(0.5, 0.01, f"{lbl_start}  to  {lbl_end}",
                  ha='center', color='#555577', fontsize=7)
 
         plt.tight_layout(rect=[0, 0.03, 1, 1])
