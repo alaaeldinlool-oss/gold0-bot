@@ -171,24 +171,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1Ow
 TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e")
 
 # Groq API Key (مجاني — من console.groq.com)
-GROQ_KEY        = os.getenv("GROQ_KEY", "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")
-
-# OpenRouter API Key (بديل Groq — openrouter.ai)
-OPENROUTER_KEY  = os.getenv("OPENROUTER_KEY", "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")
-
-# Cohere API Key (بديل تاني — cohere.com)
-COHERE_KEY      = os.getenv("COHERE_KEY", "0xoiLo7FMswnN5KZd5nK98Q4wiRZBBdNbZXMnyei")
-
-# اختار الـ AI Provider المتاح
-def get_ai_provider():
-    """اختار أحسن AI provider متاح"""
-    if OPENROUTER_KEY and len(OPENROUTER_KEY) > 10:
-        return 'openrouter'
-    if GROQ_KEY and len(GROQ_KEY) > 10 and HAS_GROQ:
-        return 'groq'
-    if COHERE_KEY and len(COHERE_KEY) > 10:
-        return 'cohere'
-    return None
+GROQ_KEY        = os.getenv("GROQ_KEY",        "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")
 
 # MongoDB URI (لحفظ الإشارات والإحصائيات)
 MONGODB_URI     = os.getenv("MONGODB_URI",     "mongodb+srv://alaaeldinlool_db_user:97sJMDccaJjmszje@cluster0.oufdfub.mongodb.net/?appName=Cluster0")
@@ -1175,177 +1158,57 @@ def get_correlation_data() -> dict:
 
 
 def get_economic_calendar() -> list:
-    """جيب الأحداث الاقتصادية بتواريخ وتوقيتات حقيقية"""
-    now     = datetime.now(timezone.utc)
-    results = []
-
-    # المصدر الأول: forexfactory calendar
+    """جيب أهم أحداث الأسبوع المؤثرة على الذهب"""
+    # أحداث ثابتة أسبوعياً — بنحدثها يدوياً أو من API
     try:
-        from_date = now.strftime('%b%d.%Y').lower()
-        to_date   = (now + timedelta(days=7)).strftime('%b%d.%Y').lower()
-        url = f"https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-        r   = requests.get(url, timeout=8, headers={'User-Agent': 'Mozilla/5.0'})
-        if r.status_code == 200:
-            events = r.json()
-            gold_kw = ['CPI', 'NFP', 'Non-Farm', 'GDP', 'FOMC', 'Fed', 'Interest Rate',
-                      'Inflation', 'PPI', 'Unemployment', 'Jobless', 'PCE', 'Retail Sales',
-                      'ISM', 'PMI', 'Core']
-            for e in events:
-                if e.get('country') != 'USD':
-                    continue
-                title    = e.get('title', '')
-                impact   = e.get('impact', '')
-                date_str = e.get('date', '')
-                time_str = e.get('time', '')
-
-                if impact not in ('High', 'Medium'):
-                    continue
-                if not any(kw.lower() in title.lower() for kw in gold_kw):
-                    continue
-
-                # تحويل التوقيت لـ GMT+2
-                try:
-                    if time_str and time_str != 'Tentative' and time_str != 'All Day':
-                        dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%dT%H:%M:%S%z")
-                        local_time = (dt + timedelta(hours=2)).strftime('%H:%M')
-                        local_date = (dt + timedelta(hours=2)).strftime('%Y-%m-%d')
-                    else:
-                        local_date = date_str[:10] if date_str else ''
-                        local_time = 'غير محدد'
-                except Exception:
-                    local_date = date_str[:10] if date_str else ''
-                    local_time = time_str or 'غير محدد'
-
-                imp_icon = '🔴' if impact == 'High' else '🟠'
-                results.append({
-                    'title':   title,
-                    'date':    local_date,
-                    'time':    local_time,
-                    'impact':  f"{imp_icon} {'عالي' if impact=='High' else 'متوسط'}",
-                    'country': 'US',
-                })
-
-            if results:
-                results.sort(key=lambda x: (x['date'], x['time']))
-                return results[:10]
-    except Exception as e:
-        log.warning(f"FF calendar error: {e}")
-
-    # المصدر الثاني: Investing.com calendar scraping
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0',
-            'X-Requested-With': 'XMLHttpRequest',
+        import requests as req
+        # نجرب API مجاني للأحداث الاقتصادية
+        url = "https://economic-calendar.tradingview.com/events"
+        params = {
+            'from': datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00'),
+            'to':   (datetime.now(timezone.utc) + timedelta(days=7)).strftime('%Y-%m-%dT00:00:00'),
+            'countries': 'US,EU,GB',
         }
-        from_ts = int(now.timestamp())
-        to_ts   = int((now + timedelta(days=7)).timestamp())
-        url = f"https://sbcharts.investing.com/events_charts/us/calendar_{from_ts}_{to_ts}.json"
-        r   = requests.get(url, headers=headers, timeout=8)
+        r = req.get(url, params=params, timeout=5)
         if r.status_code == 200:
-            data = r.json()
-            gold_kw = ['CPI', 'NFP', 'GDP', 'Fed', 'FOMC', 'Interest',
-                      'Inflation', 'PPI', 'Jobless', 'PCE', 'Retail']
-            for e in (data if isinstance(data, list) else data.get('data', [])):
-                title  = str(e.get('name', '') or e.get('event', ''))
-                if not any(kw.lower() in title.lower() for kw in gold_kw):
-                    continue
-                results.append({
-                    'title':  title,
-                    'date':   str(e.get('date', ''))[:10],
-                    'time':   str(e.get('time', 'غير محدد')),
-                    'impact': '🔴 عالي',
-                    'country': 'US',
-                })
-            if results:
-                return results[:10]
-    except Exception as e:
-        log.warning(f"Investing calendar error: {e}")
+            events = r.json().get('result', [])
+            # فلتر الأحداث ذات التأثير العالي على الذهب
+            high_impact = []
+            gold_keywords = ['CPI', 'NFP', 'GDP', 'Fed', 'FOMC', 'Interest Rate',
+                           'Inflation', 'PPI', 'Unemployment', 'PMI', 'Retail']
+            for e in events[:50]:
+                title = e.get('title', '')
+                if (e.get('importance', 0) >= 2 and
+                    any(kw.lower() in title.lower() for kw in gold_keywords)):
+                    high_impact.append({
+                        'title':  title,
+                        'date':   e.get('date', ''),
+                        'country': e.get('country', ''),
+                        'importance': e.get('importance', 1),
+                    })
+            if high_impact:
+                return high_impact[:8]
+    except Exception:
+        pass
 
-    # Fallback: أحداث الأسبوع الحالي محسوبة بالتواريخ الفعلية
-    results = []
-    # NFP — أول جمعة من كل شهر
-    first_friday = now.replace(day=1)
-    while first_friday.weekday() != 4:
-        first_friday += timedelta(days=1)
-    if first_friday >= now:
-        results.append({
-            'title':  'NFP — Non-Farm Payrolls',
-            'date':   first_friday.strftime('%Y-%m-%d'),
-            'time':   '15:30',
-            'impact': '🔴 عالي جداً',
-            'desc':   'أهم بيانات سوق العمل — تحرك مباشر للذهب',
-        })
-
-    # FOMC — المقررة 28-29 أبريل 2026
-    fomc_dates = [
-        ('2026-04-29', '21:00', 'FOMC — قرار الفائدة الأمريكية'),
-        ('2026-06-11', '21:00', 'FOMC — قرار الفائدة الأمريكية'),
-        ('2026-07-30', '21:00', 'FOMC — قرار الفائدة الأمريكية'),
-        ('2026-09-17', '21:00', 'FOMC — قرار الفائدة الأمريكية'),
+    # Fallback: أحداث ثابتة أسبوعياً
+    now = datetime.now(timezone.utc)
+    weekday = now.weekday()
+    events = [
+        {'title': 'NFP (Non-Farm Payrolls)', 'day': 'الجمعة الأولى من الشهر',
+         'impact': '🔴 عالي', 'desc': 'يؤثر مباشرة على الذهب'},
+        {'title': 'CPI (التضخم الأمريكي)', 'day': 'الأربعاء',
+         'impact': '🔴 عالي', 'desc': 'محرك رئيسي للذهب'},
+        {'title': 'FOMC Meeting', 'day': '8 مرات سنوياً',
+         'impact': '🔴 عالي جداً', 'desc': 'قرار الفائدة الأمريكية'},
+        {'title': 'GDP الأمريكي', 'day': 'ربع سنوي',
+         'impact': '🟠 متوسط', 'desc': 'يؤثر على قوة الدولار'},
+        {'title': 'Initial Jobless Claims', 'day': 'الخميس',
+         'impact': '🟡 منخفض', 'desc': 'مؤشر سوق العمل'},
+        {'title': 'PPI (أسعار المنتجين)', 'day': 'الثلاثاء/الأربعاء',
+         'impact': '🟠 متوسط', 'desc': 'مؤشر تضخم مبكر'},
     ]
-    for date_str, time_str, title in fomc_dates:
-        event_date = datetime.strptime(date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
-        if event_date >= now:
-            days_left = (event_date - now).days
-            results.append({
-                'title':  title,
-                'date':   date_str,
-                'time':   time_str,
-                'impact': '🔴 عالي جداً',
-                'desc':   f'بعد {days_left} يوم — أهم حدث للذهب',
-            })
-            if len(results) >= 2:
-                break
-
-    # CPI — ثاني أربعاء من كل شهر تقريباً
-    cpi_days = []
-    for month_offset in [0, 1]:
-        check = now.replace(day=1) + timedelta(days=31*month_offset)
-        check = check.replace(day=1)
-        wed_count = 0
-        for day in range(1, 32):
-            try:
-                d = check.replace(day=day)
-                if d.weekday() == 2:
-                    wed_count += 1
-                    if wed_count == 2:
-                        cpi_days.append(d)
-                        break
-            except Exception:
-                break
-
-    for d in cpi_days:
-        if d >= now:
-            results.append({
-                'title':  'CPI — مؤشر أسعار المستهلكين',
-                'date':   d.strftime('%Y-%m-%d'),
-                'time':   '15:30',
-                'impact': '🔴 عالي',
-                'desc':   'مؤشر التضخم الأمريكي — محرك رئيسي للذهب',
-            })
-            break
-
-    # PCE
-    results.append({
-        'title':  'Core PCE — مؤشر التضخم المفضل للفيدرالي',
-        'date':   'آخر الشهر',
-        'time':   '15:30',
-        'impact': '🔴 عالي',
-        'desc':   'الفيدرالي يعتمده لقرارات الفائدة',
-    })
-
-    # Jobless Claims
-    next_thu = now + timedelta(days=(3 - now.weekday()) % 7)
-    results.append({
-        'title':  'Initial Jobless Claims — طلبات البطالة',
-        'date':   next_thu.strftime('%Y-%m-%d'),
-        'time':   '15:30',
-        'impact': '🟠 متوسط',
-        'desc':   'كل خميس — مؤشر سوق العمل الأسبوعي',
-    })
-
-    results.sort(key=lambda x: x.get('date', '9999'))
-    return results[:8]
+    return events
 
 
 def calc_correlation_desc(corr: float) -> str:
@@ -1388,60 +1251,68 @@ def get_triple_analysis() -> dict:
         dxy_closes = []
         dxy_label  = 'DXY'
 
-        # مؤشر الدولار DXY — من EUR/USD (أدق طريقة متاحة)
-        # EUR/USD وحده بيفسر 57.6% من حركة DXY
-        # العلاقة: DXY ≈ 103.82 × EUR/USD^(-0.576) — محسوبة من البيانات التاريخية
-        # عند EUR=1.0 → DXY=103.82, عند EUR=1.135 → DXY≈98.2 ✅
-        dxy_closes = []
-        dxy_label  = 'DXY'
+        # محاولة جيب DXY من TwelveData
+        dxy_symbols = ['DXY', 'USDX', 'DX-Y.NYB']
+        for sym in dxy_symbols:
+            try:
+                url = f"https://api.twelvedata.com/time_series?symbol={sym}&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
+                r   = requests.get(url, timeout=8)
+                d   = r.json()
+                if 'values' in d and len(d['values']) > 5:
+                    dxy_closes = [float(x['close']) for x in reversed(d['values'])]
+                    dxy_label  = f'DXY ({sym})'
+                    log.info(f"DXY from {sym}: {dxy_closes[-1]:.2f}")
+                    break
+            except Exception:
+                continue
 
-        try:
-            url = f"https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
-            r   = requests.get(url, timeout=8)
-            d   = r.json()
-            if 'values' in d and len(d['values']) >= 5:
-                eur_closes = [float(x['close']) for x in reversed(d['values'])]
+        # Fallback: احسب DXY تقريبي من سلة العملات
+        # DXY = EUR(57.6%) + JPY(13.6%) + GBP(11.9%) + CAD(9.1%) + SEK(4.2%) + CHF(3.6%)
+        if not dxy_closes:
+            try:
+                basket = {
+                    'EUR/USD': -0.576,  # عكسي
+                    'USD/JPY':  0.136,
+                    'GBP/USD': -0.119,  # عكسي
+                    'USD/CAD':  0.091,
+                    'USD/CHF':  0.036,
+                }
+                basket_data = {}
+                for pair, weight in basket.items():
+                    url = f"https://api.twelvedata.com/time_series?symbol={pair}&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
+                    r   = requests.get(url, timeout=6)
+                    d   = r.json()
+                    if 'values' in d:
+                        closes = [float(x['close']) for x in reversed(d['values'])]
+                        basket_data[pair] = (closes, weight)
 
-                # نحسب DXY من EUR/USD بالمعادلة المحسوبة
-                # DXY_ref = 103.82 × EUR^(-0.576)
-                # عند EUR=1.135: 103.82 × 1.135^(-0.576) = 103.82 × 0.9265 = 96.2
-                # نضيف تصحيح من USD/JPY لو متاح
-                dxy_from_eur = [round(103.82 * (e ** -0.576), 3) for e in eur_closes]
+                if len(basket_data) >= 3:
+                    min_len = min(len(v[0]) for v in basket_data.values())
+                    dxy_approx = []
+                    for i in range(min_len):
+                        val = 100.0
+                        for pair, (closes, weight) in basket_data.items():
+                            if weight < 0:  # EUR, GBP
+                                val += abs(weight) * (1/closes[i] - 1) * 100
+                            else:
+                                val += weight * (closes[i] - 1) * 100
+                        dxy_approx.append(val)
+                    dxy_closes = dxy_approx
+                    dxy_label  = 'DXY (محسوب)'
+            except Exception as e:
+                log.warning(f"DXY basket error: {e}")
 
-                # نجرب نضيف JPY للدقة
-                try:
-                    url2 = f"https://api.twelvedata.com/time_series?symbol=USD/JPY&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
-                    r2   = requests.get(url2, timeout=6)
-                    d2   = r2.json()
-                    if 'values' in d2 and len(d2['values']) >= 5:
-                        jpy_closes = [float(x['close']) for x in reversed(d2['values'])]
-                        n = min(len(eur_closes), len(jpy_closes))
-                        # DXY أدق من EUR+JPY (57.6%+13.6%=71.2%)
-                        # DXY_approx = 50.14 × EUR^(-0.576) × JPY^(0.136) × constant
-                        # constant يُحسب بحيث DXY يوصل ~98 عند EUR=1.135, JPY=142
-                        # 50.14 × 1.135^(-0.576) × 142^(0.136) = 50.14 × 0.9265 × 1.954 = 90.8
-                        # factor = 98.226 / 90.8 = 1.082
-                        dxy_eur_jpy = []
-                        for i in range(n):
-                            val = 50.14348112 * (eur_closes[i] ** -0.576) * (jpy_closes[i] ** 0.136) * 1.082
-                            dxy_eur_jpy.append(round(val, 3))
-
-                        if dxy_eur_jpy and 85 < dxy_eur_jpy[-1] < 115:
-                            dxy_closes = dxy_eur_jpy
-                            dxy_label  = 'DXY (EUR+JPY)'
-                            log.info(f"DXY from EUR+JPY: {dxy_closes[-1]:.2f}")
-                except Exception:
-                    pass
-
-                # fallback: EUR فقط
-                if not dxy_closes or not (85 < dxy_closes[-1] < 115):
-                    dxy_closes = dxy_from_eur
-                    dxy_label  = 'DXY (EUR-based)'
-                    log.info(f"DXY from EUR only: {dxy_closes[-1]:.2f}")
-
-        except Exception as e:
-            log.warning(f"DXY EUR-based error: {e}")
-            dxy_closes = []
+        # آخر fallback: USD/JPY كمؤشر اتجاه
+        if not dxy_closes:
+            try:
+                url = f"https://api.twelvedata.com/time_series?symbol=USD/JPY&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
+                r   = requests.get(url, timeout=8)
+                d   = r.json()
+                if 'values' in d:
+                    dxy_closes = [float(x['close']) for x in reversed(d['values'])]
+                    dxy_label  = 'USD/JPY (بديل DXY)'
+            except Exception:
+                dxy_closes = []
 
         # حساب الارتباطات
         def pearson(a, b):
@@ -1542,34 +1413,31 @@ def generate_triple_chart(data: dict) -> Optional[bytes]:
         # ── الذهب ──
         ax1 = fig.add_subplot(gs[0])
         g_d = gold[-n:]
-        g_chg = f"{'+' if data['gold_chg']>=0 else ''}{data['gold_chg']:.2f}%"
         plot_line(ax1, x, g_d, '#ffd700', 'XAU/USD $',
-                  f"Gold  {data['gold_now']:.2f}$  ({g_chg})")
+                  f"Gold  {data['gold_now']:.2f}$  ({'+' if data['gold_chg']>=0 else ''}{data['gold_chg']:.2f}%)")
 
         # ── USD/EGP ──
         ax2 = fig.add_subplot(gs[1])
         e_d = egp[-n:]
         xn2 = list(range(len(e_d)))
-        e_chg = f"{'+' if data['egp_chg']>=0 else ''}{data['egp_chg']:.2f}%"
         plot_line(ax2, xn2, e_d, '#00d4aa', 'USD/EGP',
-                  f"USD/EGP  {data['egp_now']:.2f} EGP  ({e_chg})")
+                  f"USD/EGP  {data['egp_now']:.2f} جنيه  ({'+' if data['egp_chg']>=0 else ''}{data['egp_chg']:.2f}%)")
 
         # ── DXY ──
         if has_dxy:
             ax3 = fig.add_subplot(gs[2])
             d_d = dxy[-n:]
             xn3 = list(range(len(d_d)))
-            dxy_lbl = data.get('dxy_label', 'DXY').replace('محسوب', 'calc').replace('اتجاه الدولار', 'USD trend')
-            d_chg = f"{'+' if data['dxy_chg']>=0 else ''}{data['dxy_chg']:.2f}%"
+            dxy_lbl = data.get('dxy_label', 'DXY')
             plot_line(ax3, xn3, d_d, '#ff6b6b', dxy_lbl,
-                      f"{dxy_lbl}  {data['dxy_now']:.2f}  ({d_chg})")
+                      f"{dxy_lbl}  {data['dxy_now']:.2f}  ({'+' if data['dxy_chg']>=0 else ''}{data['dxy_chg']:.2f}%)")
             corr_ax = fig.add_subplot(gs[3])
         else:
             corr_ax = fig.add_subplot(gs[2])
 
         # ── الارتباطات ──
         corr_ax.set_facecolor('#16213e')
-        labels = ['Gold/EGP', 'Gold/DXY', 'EGP/DXY']
+        labels = ['ذهب/جنيه', 'ذهب/DXY', 'جنيه/DXY']
         corrs  = [data['corr_gold_egp'], data['corr_gold_dxy'], data['corr_egp_dxy']]
         colors = ['#ffd700' if c >= 0 else '#ff4757' for c in corrs]
         bars   = corr_ax.bar(labels, corrs, color=colors, width=0.5, zorder=2)
@@ -1578,14 +1446,14 @@ def generate_triple_chart(data: dict) -> Optional[bytes]:
         corr_ax.set_ylabel('Corr', color='#aaaaaa', fontsize=8)
         corr_ax.tick_params(colors='#e0e0e0', labelsize=8)
         corr_ax.grid(axis='y', color='#2a2a4a', alpha=0.4)
-        corr_ax.set_title('Correlation (last 30 days)', color='#e0e0e0', fontsize=9)
+        corr_ax.set_title('الارتباط (آخر 30 يوم)', color='#e0e0e0', fontsize=9)
         for bar, c in zip(bars, corrs):
             corr_ax.text(bar.get_x() + bar.get_width()/2,
                          c + (0.06 if c >= 0 else -0.12),
                          f'{c:+.3f}', ha='center', color='#ffffff',
                          fontsize=8, fontweight='bold')
 
-        fig.text(0.5, 0.01, f"{lbl_start}  to  {lbl_end}",
+        fig.text(0.5, 0.01, f"{lbl_start}  ←  {lbl_end}",
                  ha='center', color='#555577', fontsize=7)
 
         plt.tight_layout(rect=[0, 0.03, 1, 1])
@@ -2912,123 +2780,60 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ════════════════════════════════════════════════════════════════
-#  AI ANALYSIS — OpenRouter / Groq / Cohere
+#  GROQ AI ANALYSIS (مجاني)
 # ════════════════════════════════════════════════════════════════
 
-def build_ai_prompt(sig: dict, extra_data: dict = None) -> str:
-    """بناء الـ prompt للتحليل"""
-    extra_text = ""
-    if extra_data:
-        if extra_data.get('patterns'):
-            pats = extra_data['patterns']
-            bull_pats = [p['name'] for p in pats if p.get('signal')=='BULLISH']
-            bear_pats = [p['name'] for p in pats if p.get('signal')=='BEARISH']
-            if bull_pats: extra_text += f"\nنماذج صاعدة: {', '.join(bull_pats)}"
-            if bear_pats: extra_text += f"\nنماذج هابطة: {', '.join(bear_pats)}"
-        if extra_data.get('gann'):
-            g = extra_data['gann']
-            if g.get('resistance'): extra_text += f"\nGann مقاومة: {g['resistance'][0]['level']:.2f}"
-            if g.get('support'):    extra_text += f"\nGann دعم: {g['support'][0]['level']:.2f}"
-        if extra_data.get('session'):
-            sess = extra_data['session']
-            if not sess.get('weekend'):
-                extra_text += f"\nالسيشن: {sess.get('name','')}"
+async def claude_analysis(sig: dict, extra_data: dict = None) -> str:
+    if not HAS_GROQ or not GROQ_KEY:
+        return "⚠️ Groq API غير مفعّل. أضف GROQ_KEY في Render.\naحصل على Key المجاني من: console.groq.com"
+    try:
+        client = Groq(api_key=GROQ_KEY)
 
-    return f"""أنت محلل ذهب خبير. حلل البيانات التالية وقدم رأيك بالعربية في 5 أسطر فقط:
+        # بيانات إضافية لو موجودة
+        extra_text = ""
+        if extra_data:
+            if extra_data.get('patterns'):
+                pats = extra_data['patterns']
+                bull_pats = [p['name'] for p in pats if p.get('signal')=='BULLISH']
+                bear_pats = [p['name'] for p in pats if p.get('signal')=='BEARISH']
+                if bull_pats: extra_text += f"\nنماذج صاعدة: {', '.join(bull_pats)}"
+                if bear_pats: extra_text += f"\nنماذج هابطة: {', '.join(bear_pats)}"
+            if extra_data.get('gann'):
+                g = extra_data['gann']
+                if g.get('resistance'): extra_text += f"\nGann مقاومة: {g['resistance'][0]['level']:.2f}"
+                if g.get('support'):    extra_text += f"\nGann دعم: {g['support'][0]['level']:.2f}"
+            if extra_data.get('session'):
+                sess = extra_data['session']
+                if not sess.get('weekend'):
+                    extra_text += f"\nالسيشن: {sess.get('name','')}"
+
+        prompt = f"""أنت محلل ذهب خبير. حلل البيانات التالية وقدم رأيك بالعربية في 5 أسطر فقط:
 
 السعر: ${sig['price']:.2f}
-الاتجاه: {sig['direction']}
-RSI: {sig['RSI']:.0f} {'(تشبع شرائي)' if sig['RSI']>70 else '(تشبع بيعي)' if sig['RSI']<30 else '(طبيعي)'}
-MACD: {'صاعد' if sig['MACD']['bull'] else 'هابط'}
-Supertrend: {'صاعد' if sig['st_bull'] else 'هابط'}
-BUY/SELL Score: {sig['buyScore']}/12 — {sig['sellScore']}/12
+الاتجاه العام: {sig['direction']}
+RSI({sig['RSI']:.0f}): {'تشبع شرائي ⚠️' if sig['RSI']>70 else 'تشبع بيعي ⚠️' if sig['RSI']<30 else 'طبيعي'}
+MACD: {'صاعد ✅' if sig['MACD']['bull'] else 'هابط ❌'}
+Supertrend: {'صاعد ✅' if sig['st_bull'] else 'هابط ❌'}
+EMA Stack: {'صاعدة' if sig['ema_bull'] else 'هابطة' if sig['ema_bear'] else 'محايدة'}
+BUY/SELL: {sig['buyScore']}/12 — {sig['sellScore']}/12
 ATR: {sig['ATR']:.2f}{extra_text}
 
 قدم بالعربية:
 1. ملخص الوضع (جملتان)
 2. أهم مستوى دعم ومقاومة
-3. توصية واضحة (شراء/بيع/انتظار) مع السبب
+3. توصية واضحة (شراء/بيع/انتظار) مع السبب الرئيسي
 4. مستوى الخطر (منخفض/متوسط/عالي)"""
 
-
-async def claude_analysis(sig: dict, extra_data: dict = None) -> str:
-    """تحليل AI — بيجرب OpenRouter ثم Groq ثم Cohere"""
-    provider = get_ai_provider()
-
-    if not provider:
-        return ("🤖 AI التحليل غير مفعّل\n\n"
-                "أضف في Railway Variables:\n"
-                "OPENROUTER_KEY — من openrouter.ai (مجاني)\n"
-                "أو GROQ_KEY — من console.groq.com")
-
-    prompt = build_ai_prompt(sig, extra_data)
-
-    # ── OpenRouter (الأفضل — نماذج متعددة مجانية) ──
-    if provider == 'openrouter':
-        try:
-            r = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_KEY}",
-                    "Content-Type":  "application/json",
-                    "HTTP-Referer":  "https://gold-master-bot.app",
-                    "X-Title":       "Gold Master Bot",
-                },
-                json={
-                    "model":    "meta-llama/llama-3.3-70b-instruct:free",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 450,
-                    "temperature": 0.3,
-                },
-                timeout=20
-            )
-            if r.status_code == 200:
-                result = r.json()['choices'][0]['message']['content']
-                return f"🤖 تحليل AI (OpenRouter):\n\n{result}"
-            else:
-                log.warning(f"OpenRouter error: {r.status_code} {r.text[:100]}")
-        except Exception as e:
-            log.warning(f"OpenRouter failed: {e}")
-
-    # ── Groq ──
-    if GROQ_KEY and HAS_GROQ:
-        try:
-            client = Groq(api_key=GROQ_KEY)
-            response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=450,
-                temperature=0.3,
-            )
-            result = response.choices[0].message.content
-            return f"🤖 تحليل AI (Groq):\n\n{result}"
-        except Exception as e:
-            log.warning(f"Groq failed: {e}")
-
-    # ── Cohere ──
-    if COHERE_KEY:
-        try:
-            r = requests.post(
-                "https://api.cohere.com/v2/chat",
-                headers={
-                    "Authorization": f"Bearer {COHERE_KEY}",
-                    "Content-Type":  "application/json",
-                },
-                json={
-                    "model":    "command-r-plus",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 450,
-                },
-                timeout=20
-            )
-            if r.status_code == 200:
-                result = r.json()['message']['content'][0]['text']
-                return f"🤖 تحليل AI (Cohere):\n\n{result}"
-        except Exception as e:
-            log.warning(f"Cohere failed: {e}")
-
-    return "⚠️ فشل التحليل — جرب تاني بعد دقيقة."
-
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=450,
+            temperature=0.3,
+        )
+        result = response.choices[0].message.content
+        return f"🤖 تحليل Groq AI:\n\n{result}"
+    except Exception as e:
+        return f"⚠️ Groq error: {str(e)[:100]}"
 
 # ════════════════════════════════════════════════════════════════
 #  CHART GENERATOR — شارت احترافي بالصورة
@@ -3706,61 +3511,38 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             loop   = asyncio.get_event_loop()
             events = await asyncio.wait_for(
                 loop.run_in_executor(None, get_economic_calendar),
-                timeout=12.0
+                timeout=10.0
             )
-            now_str = now_local().strftime('%Y-%m-%d')
-            lines   = [
+            lines = [
                 f"📰 الأحداث الاقتصادية المؤثرة على الذهب",
-                f"🗓 الأسبوع الحالي + القادم",
                 f"",
             ]
             for e in events:
-                date  = e.get('date', '')
-                time_ = e.get('time', '')
-                title = e.get('title', '')
-                imp   = e.get('impact', '🟡')
-                desc  = e.get('desc', '')
-
-                # حساب كم يوم باقي
-                try:
-                    if date and date != 'آخر الشهر' and len(date) == 10:
-                        ev_date = datetime.strptime(date, '%Y-%m-%d')
-                        diff = (ev_date.date() - datetime.now(timezone.utc).date()).days
-                        if diff == 0:
-                            day_lbl = 'اليوم'
-                        elif diff == 1:
-                            day_lbl = 'غداً'
-                        elif diff < 0:
-                            day_lbl = f'قبل {abs(diff)} يوم'
-                        else:
-                            day_lbl = f'بعد {diff} يوم'
-                    else:
-                        day_lbl = date
-                except Exception:
-                    day_lbl = date
-
-                # عرض الحدث
-                lines.append(f"{imp} {title}")
-                if date and time_:
-                    lines.append(f"   📅 {date}  ⏰ {time_} GMT+2  ({day_lbl})")
-                elif date:
-                    lines.append(f"   📅 {date}  ({day_lbl})")
-                if desc:
-                    lines.append(f"   💬 {desc}")
-                lines.append("")
-
+                if 'impact' in e:
+                    # Fallback events
+                    lines += [
+                        f"{e['impact']} {e['title']}",
+                        f"   📅 {e['day']}",
+                        f"   {e['desc']}",
+                        f"",
+                    ]
+                else:
+                    # API events
+                    imp = '🔴' if e.get('importance',1) >= 3 else '🟠' if e.get('importance',1) >= 2 else '🟡'
+                    lines += [
+                        f"{imp} {e['title']} ({e.get('country','')})",
+                        f"   📅 {e.get('date','')[:10]}",
+                        f"",
+                    ]
             lines += [
-                "─────────────────",
-                "💡 الأقوى تأثيراً على الذهب:",
-                "  🔴 FOMC — قرار الفائدة (الأهم)",
-                "  🔴 CPI/PCE — التضخم",
-                "  🔴 NFP — الوظائف (أول جمعة الشهر)",
-                "",
+                f"💡 الأحداث الأهم للذهب:",
+                f"  🔴 FOMC — قرار الفائدة",
+                f"  🔴 CPI — بيانات التضخم",
+                f"  🔴 NFP — الوظائف الأمريكية",
+                f"",
                 f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2",
             ]
             text = '\n'.join(lines)
-        except asyncio.TimeoutError:
-            text = "⏱ انتهت المهلة — جرب تاني."
         except Exception as e:
             text = f"❌ خطأ: {str(e)[:100]}"
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
@@ -3974,33 +3756,35 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        reply_markup=main_keyboard())
 
     elif data == "ai":
-        provider = get_ai_provider()
-        if not provider:
-            text = ("🤖 AI التحليل\n\n❌ غير مفعّل\n\n"
-                    "أضف في Railway Variables:\n"
-                    "OPENROUTER_KEY — openrouter.ai (مجاني)\n"
-                    "أو GROQ_KEY — console.groq.com")
+        if not HAS_GROQ or not GROQ_KEY:
+            text = ("🤖 Groq AI\n\n❌ غير مفعّل\n\n"
+                    "لتفعيله أضف في Render:\n"
+                    "Key: GROQ_KEY\n"
+                    "Value: مفتاح من console.groq.com")
             await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                            reply_markup=main_keyboard())
         else:
             try:
-                provider_names = {'openrouter': 'OpenRouter', 'groq': 'Groq', 'cohere': 'Cohere'}
-                await query.message.reply_text(
-                    f"⏳ جاري التحليل بالذكاء الاصطناعي ({provider_names.get(provider, provider)})...",
-                    reply_markup=main_keyboard()
-                )
+                await query.message.reply_text("⏳ جاري التحليل بالذكاء الاصطناعي...",
+                                               reply_markup=main_keyboard())
                 d = fetch_ohlcv_cached("1h", 200)
                 if not d:
                     text = "❌ فشل جلب البيانات."
                 else:
                     sig     = full_analysis(d)
                     price   = sig['price']
+                    # جمع بيانات إضافية
                     gann    = calc_gann_square(price)
                     session = get_current_session()
+                    # نماذج الشموع
                     c_pats  = detect_candlestick_patterns(
                         d['open'], d['high'], d['low'], d['close'])
-                    extra = {'gann': gann, 'session': session, 'patterns': c_pats}
-                    text  = await claude_analysis(sig, extra)
+                    extra   = {
+                        'gann':    gann,
+                        'session': session,
+                        'patterns': c_pats,
+                    }
+                    text = await claude_analysis(sig, extra)
             except Exception as e:
                 text = f"❌ خطأ في AI: {str(e)[:100]}"
             await query.message.reply_text(text, parse_mode=ParseMode.HTML,
