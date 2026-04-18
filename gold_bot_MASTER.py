@@ -2358,63 +2358,25 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _ai_call(prompt: str, max_tokens: int = 700) -> str:
     """
     يستدعي AI API بالترتيب:
-    1. OpenRouter (نماذج مجانية متعددة)
-    2. Cohere v1 (مجاني)
-    3. Hugging Face (fallback)
+    1. Cohere (مجاني — dashboard.cohere.com)
+    2. Hugging Face (مجاني — huggingface.co)
+    3. OpenRouter (fallback)
     """
     errors = []
 
-    # ── 1. OpenRouter ────────────────────────────────────────
-    or_key = os.getenv("OPENROUTER_KEY", OPENROUTER_KEY)
-    if or_key:
-        free_models = [
-            "mistralai/mistral-small-3.2-24b-instruct:free",
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "google/gemma-3-27b-it:free",
-            "qwen/qwen-2.5-72b-instruct:free",
-            "mistralai/mistral-7b-instruct:free",
-        ]
-        for model in free_models:
-            try:
-                resp = requests.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {or_key}",
-                        "Content-Type":  "application/json",
-                        "HTTP-Referer":  "https://t.me/goldmasterbot",
-                        "X-Title":       "Gold Master Bot",
-                    },
-                    json={
-                        "model":       model,
-                        "messages":    [{"role": "user", "content": prompt}],
-                        "max_tokens":  max_tokens,
-                        "temperature": 0.4,
-                    },
-                    timeout=30,
-                )
-                if resp.status_code == 200:
-                    result = resp.json()["choices"][0]["message"]["content"]
-                    log.info(f"OpenRouter OK: {model}")
-                    return result
-                else:
-                    log.warning(f"OpenRouter {model}: {resp.status_code} {resp.text[:80]}")
-            except Exception as e:
-                errors.append(f"OR/{model}: {e}")
-                continue
-
-    # ── 2. Cohere v1 ─────────────────────────────────────────
+    # ── 1. Cohere ────────────────────────────────────────────
     cohere_key = os.getenv("COHERE_KEY", COHERE_KEY_DEFAULT)
     if cohere_key:
         try:
             resp = requests.post(
-                "https://api.cohere.com/v1/chat",
+                "https://api.cohere.com/v2/chat",
                 headers={
                     "Authorization": f"Bearer {cohere_key}",
                     "Content-Type":  "application/json",
                 },
                 json={
-                    "model":       "command-r-plus",
-                    "message":     prompt,
+                    "model":       "command-r-plus-08-2024",
+                    "messages":    [{"role": "user", "content": prompt}],
                     "max_tokens":  max_tokens,
                     "temperature": 0.4,
                 },
@@ -2452,31 +2414,42 @@ def _ai_call(prompt: str, max_tokens: int = 700) -> str:
             errors.append(f"HF: {e}")
             log.warning(f"HF error: {e}")
 
-    # ── 3. OpenRouter ────────────────────────────────────────
+    # ── 3. OpenRouter — نجرب عدة نماذج مجانية ────────────────
     or_key = os.getenv("OPENROUTER_KEY", OPENROUTER_KEY)
     if or_key:
-        try:
-            resp = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {or_key}",
-                    "Content-Type":  "application/json",
-                    "HTTP-Referer":  "https://goldmasterbot.app",
-                    "X-Title":       "Gold Master Bot",
-                },
-                json={
-                    "model":       "mistralai/mistral-small-3.2-24b-instruct:free",
-                    "messages":    [{"role": "user", "content": prompt}],
-                    "max_tokens":  max_tokens,
-                    "temperature": 0.4,
-                },
-                timeout=30,
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            errors.append(f"OpenRouter: {e}")
-            log.warning(f"OpenRouter error: {e}")
+        free_models = [
+            "mistralai/mistral-small-3.2-24b-instruct:free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "google/gemma-3-27b-it:free",
+            "qwen/qwen-2.5-72b-instruct:free",
+            "mistralai/mistral-7b-instruct:free",
+        ]
+        for model in free_models:
+            try:
+                resp = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {or_key}",
+                        "Content-Type":  "application/json",
+                        "HTTP-Referer":  "https://t.me/goldmasterbot",
+                        "X-Title":       "Gold Master Bot",
+                    },
+                    json={
+                        "model":       model,
+                        "messages":    [{"role": "user", "content": prompt}],
+                        "max_tokens":  max_tokens,
+                        "temperature": 0.4,
+                    },
+                    timeout=30,
+                )
+                if resp.status_code == 200:
+                    log.info(f"OpenRouter OK: {model}")
+                    return resp.json()["choices"][0]["message"]["content"]
+                else:
+                    log.warning(f"OpenRouter {model}: {resp.status_code}")
+            except Exception as e:
+                errors.append(f"OR: {e}")
+                continue
 
     raise ValueError(f"كل AI engines فشلت: {' | '.join(errors)}")
 
@@ -3389,23 +3362,20 @@ def get_triple_analysis() -> dict:
         egp_closes  = []
         try:
             url = f"https://api.twelvedata.com/time_series?symbol=USD/EGP&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
-            r = requests.get(url, timeout=8)
-            d = r.json()
+            d = requests.get(url, timeout=8).json()
             if 'values' in d:
                 egp_closes = [float(x['close']) for x in reversed(d['values'])]
         except Exception: pass
         dxy_closes = []
         dxy_label  = 'DXY'
         try:
-            ue = f"https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
-            uj = f"https://api.twelvedata.com/time_series?symbol=USD/JPY&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
-            re_ = requests.get(ue, timeout=8).json()
-            rj_ = requests.get(uj, timeout=8).json()
-            if 'values' in re_ and 'values' in rj_:
-                eur_cl = [float(x['close']) for x in reversed(re_['values'])]
-                jpy_cl = [float(x['close']) for x in reversed(rj_['values'])]
-                n = min(len(eur_cl), len(jpy_cl))
-                dxy_closes = [round(50.14348112*(eur_cl[i]**-0.576)*(jpy_cl[i]**0.136)*1.082,2) for i in range(n)]
+            de = requests.get(f"https://api.twelvedata.com/time_series?symbol=EUR/USD&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}", timeout=8).json()
+            dj = requests.get(f"https://api.twelvedata.com/time_series?symbol=USD/JPY&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}", timeout=8).json()
+            if 'values' in de and 'values' in dj:
+                ec = [float(x['close']) for x in reversed(de['values'])]
+                jc = [float(x['close']) for x in reversed(dj['values'])]
+                n = min(len(ec), len(jc))
+                dxy_closes = [round(50.14348112*(ec[i]**-0.576)*(jc[i]**0.136)*1.082,2) for i in range(n)]
                 dxy_label  = 'DXY (EUR+JPY)'
         except Exception: pass
         def pearson(a, b):
@@ -3417,86 +3387,65 @@ def get_triple_analysis() -> dict:
             den = (sum((a[i]-ma)**2 for i in range(n))*sum((b[i]-mb)**2 for i in range(n)))**0.5
             return round(num/den, 3) if den else 0
         def rets(p): return [p[i]/p[i-1]-1 for i in range(1, len(p))]
-        gold_ret = rets(gold_closes)
-        egp_now  = egp_closes[-1] if egp_closes else (get_usd_egp() or 52.0)
-        dxy_now  = dxy_closes[-1] if dxy_closes else 0
-        gold_now = gold_closes[-1]
-        gold_chg = (gold_closes[-1]/gold_closes[-2]-1)*100 if len(gold_closes)>1 else 0
-        egp_chg  = (egp_closes[-1]/egp_closes[-2]-1)*100  if len(egp_closes)>1  else 0
-        dxy_chg  = (dxy_closes[-1]/dxy_closes[-2]-1)*100  if len(dxy_closes)>1  else 0
-        egp_ret  = rets(egp_closes)  if len(egp_closes)>1  else []
-        dxy_ret  = rets(dxy_closes)  if len(dxy_closes)>1  else []
+        gr = rets(gold_closes)
+        er = rets(egp_closes)  if len(egp_closes)>1  else []
+        dr = rets(dxy_closes)  if len(dxy_closes)>1  else []
+        gn = gold_closes[-1]; en = egp_closes[-1] if egp_closes else (get_usd_egp() or 52.0)
+        dn = dxy_closes[-1] if dxy_closes else 0
         return {
-            'gold_closes': gold_closes, 'egp_closes': egp_closes or [egp_now]*len(gold_closes),
+            'gold_closes': gold_closes, 'egp_closes': egp_closes or [en]*len(gold_closes),
             'dxy_closes': dxy_closes, 'dates': gold_dates,
-            'gold_now': round(gold_now,2), 'gold_chg': round(gold_chg,2),
-            'egp_now':  round(egp_now,2),  'egp_chg':  round(egp_chg,2),
-            'dxy_now':  round(dxy_now,2),  'dxy_chg':  round(dxy_chg,2),
-            'dxy_label': dxy_label,
-            'gold_egp':  round(gold_now * egp_now / 31.1035, 0),
-            'corr_gold_egp': pearson(gold_ret, egp_ret) if egp_ret else 0,
-            'corr_gold_dxy': pearson(gold_ret, dxy_ret) if dxy_ret else 0,
-            'corr_egp_dxy':  pearson(egp_ret,  dxy_ret) if egp_ret and dxy_ret else 0,
+            'gold_now': round(gn,2), 'gold_chg': round((gn/gold_closes[-2]-1)*100,2) if len(gold_closes)>1 else 0,
+            'egp_now':  round(en,2), 'egp_chg':  round((en/egp_closes[-2]-1)*100,2)  if len(egp_closes)>1  else 0,
+            'dxy_now':  round(dn,2), 'dxy_chg':  round((dn/dxy_closes[-2]-1)*100,2)  if len(dxy_closes)>1  else 0,
+            'dxy_label': dxy_label, 'gold_egp': round(gn*en/31.1035, 0),
+            'corr_gold_egp': pearson(gr,er) if er else 0,
+            'corr_gold_dxy': pearson(gr,dr) if dr else 0,
+            'corr_egp_dxy':  pearson(er,dr) if er and dr else 0,
         }
     except Exception as e:
-        log.error(f"get_triple_analysis: {e}")
-        return {}
+        log.error(f"get_triple_analysis: {e}"); return {}
 
 
 def generate_triple_chart(data: dict) -> Optional[bytes]:
-    """شارت ذهب / USD-EGP / DXY / ارتباط"""
     try:
         import matplotlib; matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-        import matplotlib.gridspec as gridspec
-        import io
-        gold = data['gold_closes']; egp = data['egp_closes']; dxy = data['dxy_closes']
-        n = min(len(gold), 30); x = list(range(n))
-        dates = data.get('dates', [])
-        lbl_s = dates[-n] if len(dates)>=n else ''; lbl_e = dates[-1] if dates else ''
-        has_dxy = len(dxy) >= 5
-        rows = 4 if has_dxy else 3
-        ratios = [2,1.5,1.5,1] if has_dxy else [2,1.5,1]
-        fig = plt.figure(figsize=(12, 10 if has_dxy else 8), facecolor='#1a1a2e')
-        gs  = gridspec.GridSpec(rows, 1, hspace=0.45, figure=fig, height_ratios=ratios)
-        def pl(ax, xd, yd, color, ylabel, title):
-            ax.set_facecolor('#16213e'); ax.plot(xd, yd, color=color, linewidth=2)
-            ax.fill_between(xd, yd, min(yd), alpha=0.12, color=color)
-            ax.set_ylabel(ylabel, color=color, fontsize=8)
-            ax.tick_params(colors='#aaaaaa', labelsize=7)
-            ax.grid(color='#2a2a4a', alpha=0.4)
-            ax.set_title(title, color=color, fontsize=9, fontweight='bold', pad=4)
-            ax.set_xticks([])
-        g_c = f"{'+' if data['gold_chg']>=0 else ''}{data['gold_chg']:.2f}%"
-        e_c = f"{'+' if data['egp_chg']>=0 else ''}{data['egp_chg']:.2f}%"
-        pl(fig.add_subplot(gs[0]), x, gold[-n:], '#ffd700', 'XAU/USD $', f"Gold  {data['gold_now']:.2f}$  ({g_c})")
-        e_d = egp[-n:]; pl(fig.add_subplot(gs[1]), list(range(len(e_d))), e_d, '#00d4aa', 'USD/EGP', f"USD/EGP  {data['egp_now']:.2f} EGP  ({e_c})")
+        import matplotlib.pyplot as plt, matplotlib.gridspec as gridspec, io
+        gold=data['gold_closes']; egp=data['egp_closes']; dxy=data['dxy_closes']
+        n=min(len(gold),30); x=list(range(n))
+        dates=data.get('dates',[]); ls=dates[-n] if len(dates)>=n else ''; le=dates[-1] if dates else ''
+        has_dxy=len(dxy)>=5; rows=4 if has_dxy else 3; ratios=[2,1.5,1.5,1] if has_dxy else [2,1.5,1]
+        fig=plt.figure(figsize=(12,10 if has_dxy else 8),facecolor='#1a1a2e')
+        gs=gridspec.GridSpec(rows,1,hspace=0.45,figure=fig,height_ratios=ratios)
+        def pl(ax,xd,yd,color,ylabel,title):
+            ax.set_facecolor('#16213e'); ax.plot(xd,yd,color=color,linewidth=2)
+            ax.fill_between(xd,yd,min(yd),alpha=0.12,color=color)
+            ax.set_ylabel(ylabel,color=color,fontsize=8); ax.tick_params(colors='#aaaaaa',labelsize=7)
+            ax.grid(color='#2a2a4a',alpha=0.4); ax.set_title(title,color=color,fontsize=9,fontweight='bold',pad=4); ax.set_xticks([])
+        gc=f"{'+' if data['gold_chg']>=0 else ''}{data['gold_chg']:.2f}%"
+        ec=f"{'+' if data['egp_chg']>=0 else ''}{data['egp_chg']:.2f}%"
+        pl(fig.add_subplot(gs[0]),x,gold[-n:],'#ffd700','XAU/USD $',f"Gold  {data['gold_now']:.2f}$  ({gc})")
+        ed=egp[-n:]; pl(fig.add_subplot(gs[1]),list(range(len(ed))),ed,'#00d4aa','USD/EGP',f"USD/EGP  {data['egp_now']:.2f} EGP  ({ec})")
         if has_dxy:
-            d_d = dxy[-n:]; d_c = f"{'+' if data['dxy_chg']>=0 else ''}{data['dxy_chg']:.2f}%"
-            dl  = data.get('dxy_label','DXY').replace('محسوب','calc')
-            pl(fig.add_subplot(gs[2]), list(range(len(d_d))), d_d, '#ff6b6b', dl, f"{dl}  {data['dxy_now']:.2f}  ({d_c})")
-            ca = fig.add_subplot(gs[3])
-        else:
-            ca = fig.add_subplot(gs[2])
+            dd=dxy[-n:]; dc=f"{'+' if data['dxy_chg']>=0 else ''}{data['dxy_chg']:.2f}%"; dl=data.get('dxy_label','DXY')
+            pl(fig.add_subplot(gs[2]),list(range(len(dd))),dd,'#ff6b6b',dl,f"{dl}  {data['dxy_now']:.2f}  ({dc})")
+            ca=fig.add_subplot(gs[3])
+        else: ca=fig.add_subplot(gs[2])
         ca.set_facecolor('#16213e')
-        labels = ['Gold/EGP','Gold/DXY','EGP/DXY']
-        corrs  = [data['corr_gold_egp'],data['corr_gold_dxy'],data['corr_egp_dxy']]
-        colors = ['#ffd700' if c>=0 else '#ff4757' for c in corrs]
-        bars = ca.bar(labels, corrs, color=colors, width=0.5, zorder=2)
-        ca.axhline(0, color='#888899', linewidth=1); ca.set_ylim(-1.1,1.1)
+        labels=['Gold/EGP','Gold/DXY','EGP/DXY']; corrs=[data['corr_gold_egp'],data['corr_gold_dxy'],data['corr_egp_dxy']]
+        colors=['#ffd700' if c>=0 else '#ff4757' for c in corrs]
+        bars=ca.bar(labels,corrs,color=colors,width=0.5,zorder=2)
+        ca.axhline(0,color='#888899',linewidth=1); ca.set_ylim(-1.1,1.1)
         ca.set_ylabel('Corr',color='#aaaaaa',fontsize=8); ca.tick_params(colors='#e0e0e0',labelsize=8)
         ca.grid(axis='y',color='#2a2a4a',alpha=0.4); ca.set_title('Correlation (last 30 days)',color='#e0e0e0',fontsize=9)
-        for bar, c in zip(bars, corrs):
-            ca.text(bar.get_x()+bar.get_width()/2, c+(0.06 if c>=0 else -0.12), f'{c:+.3f}', ha='center', color='#ffffff', fontsize=8, fontweight='bold')
-        fig.text(0.5, 0.01, f"{lbl_s}  to  {lbl_e}", ha='center', color='#555577', fontsize=7)
+        for bar,c in zip(bars,corrs):
+            ca.text(bar.get_x()+bar.get_width()/2,c+(0.06 if c>=0 else -0.12),f'{c:+.3f}',ha='center',color='#ffffff',fontsize=8,fontweight='bold')
+        fig.text(0.5,0.01,f"{ls}  to  {le}",ha='center',color='#555577',fontsize=7)
         plt.tight_layout(rect=[0,0.03,1,1])
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor='#1a1a2e')
-        plt.close(fig); buf.seek(0)
+        buf=io.BytesIO(); plt.savefig(buf,format='png',dpi=130,bbox_inches='tight',facecolor='#1a1a2e'); plt.close(fig); buf.seek(0)
         return buf.read()
     except Exception as e:
-        log.error(f"generate_triple_chart: {e}")
-        return None
+        log.error(f"generate_triple_chart: {e}"); return None
 
 
 def fmt_triple_msg(data: dict) -> str:
@@ -3509,68 +3458,58 @@ def fmt_triple_msg(data: dict) -> str:
     def fc(v): return f"+{v:.2f}%" if v>=0 else f"{v:.2f}%"
     cge=data['corr_gold_egp']; cgd=data['corr_gold_dxy']; ced=data['corr_egp_dxy']
     dl=data.get('dxy_label','DXY')
-    interp = "DXY قوي = ضغط على الذهب" if cgd<=-0.5 else "DXY والذهب يصعدان معاً" if cgd>=0.5 else "DXY والذهب متقطعا العلاقة"
-    return "\n".join([
+    interp="DXY قوي = ضغط على الذهب" if cgd<=-0.5 else "DXY والذهب يصعدان معاً" if cgd>=0.5 else "DXY والذهب متقطعا العلاقة"
+    lines=[
         "🔗 العلاقة الثلاثية: ذهب / DXY / جنيه","آخر 30 يوم تداول","",
-        "💰 الأسعار:",
+        "💰 الأسعار:","",
         f"  🥇 الذهب:    {data['gold_now']:.2f}$  ({fc(data['gold_chg'])})",
         f"  📊 {dl}: {data['dxy_now']:.2f}  ({fc(data['dxy_chg'])})",
         f"  💵 USD/EGP: {data['egp_now']:.2f} جنيه  ({fc(data['egp_chg'])})",
         f"  🏅 الجرام 24k: {data['gold_egp']:,.0f} جنيه","",
-        "📊 الارتباطات:",
+        "📊 الارتباطات (آخر 30 يوم):",
         f"  ذهب ↔ DXY:  {cgd:+.3f}  {cd(cgd)}",
         f"  ذهب ↔ جنيه: {cge:+.3f}  {cd(cge)}",
         f"  DXY ↔ جنيه: {ced:+.3f}  {cd(ced)}","",
         f"💡 {interp}","",
-        "📌 القاعدة: ↑ DXY = ↓ ذهب$  |  ↑ USD/EGP = ↑ ذهب بالجنيه",
+        "📌 القاعدة:",
+        "  ↑ DXY = ↓ ذهب بالدولار",
+        "  ↑ USD/EGP = ↑ ذهب بالجنيه",
         f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2",
-    ])
+    ]
+    return "\n".join(lines)
 
 
 def get_economic_calendar() -> list:
-    now = datetime.now(timezone.utc)
-    results = []
+    now=datetime.now(timezone.utc); results=[]
     try:
-        r = requests.get("https://nfs.faireconomy.media/ff_calendar_thisweek.json",
-                         timeout=8, headers={'User-Agent':'Mozilla/5.0'})
-        if r.status_code == 200:
-            kw = ['CPI','NFP','Non-Farm','GDP','FOMC','Fed','Interest','Inflation',
-                  'PPI','Unemployment','Jobless','PCE','Retail','ISM','PMI']
+        r=requests.get("https://nfs.faireconomy.media/ff_calendar_thisweek.json",timeout=8,headers={'User-Agent':'Mozilla/5.0'})
+        if r.status_code==200:
+            kw=['CPI','NFP','Non-Farm','GDP','FOMC','Fed','Interest','Inflation','PPI','Jobless','PCE','Retail','ISM','PMI']
             for e in r.json():
-                if e.get('country') != 'USD': continue
-                if e.get('impact') not in ('High','Medium'): continue
+                if e.get('country')!='USD' or e.get('impact') not in ('High','Medium'): continue
                 if not any(k.lower() in e.get('title','').lower() for k in kw): continue
                 try:
-                    dt = datetime.strptime(f"{e['date']} {e['time']}", "%Y-%m-%dT%H:%M:%S%z")
-                    ld = (dt+timedelta(hours=2)).strftime('%Y-%m-%d')
-                    lt = (dt+timedelta(hours=2)).strftime('%H:%M')
-                except Exception:
-                    ld = e.get('date','')[:10]; lt = 'غير محدد'
-                imp = '🔴' if e.get('impact')=='High' else '🟠'
-                results.append({'title':e.get('title',''),'date':ld,'time':lt,
-                                 'impact':f"{imp} {'عالي' if e.get('impact')=='High' else 'متوسط'}"})
+                    dt=datetime.strptime(f"{e['date']} {e['time']}","%Y-%m-%dT%H:%M:%S%z")
+                    ld=(dt+timedelta(hours=2)).strftime('%Y-%m-%d'); lt=(dt+timedelta(hours=2)).strftime('%H:%M')
+                except Exception: ld=e.get('date','')[:10]; lt='غير محدد'
+                imp='🔴' if e.get('impact')=='High' else '🟠'
+                results.append({'title':e.get('title',''),'date':ld,'time':lt,'impact':f"{imp} {'عالي' if e.get('impact')=='High' else 'متوسط'}"})
             if results:
-                results.sort(key=lambda x:(x['date'],x['time']))
-                return results[:10]
-    except Exception as e:
-        log.warning(f"FF calendar: {e}")
-    fomc = [('2026-04-29','21:00'),('2026-06-11','21:00'),('2026-07-30','21:00')]
+                results.sort(key=lambda x:(x['date'],x['time'])); return results[:10]
+    except Exception as e: log.warning(f"FF calendar: {e}")
+    fomc=[('2026-04-29','21:00'),('2026-06-11','21:00'),('2026-07-30','21:00')]
     for ds,ts in fomc:
-        d = datetime.strptime(ds,'%Y-%m-%d').replace(tzinfo=timezone.utc)
-        if d >= now:
-            diff = (d.date()-now.date()).days
-            results.append({'title':'FOMC — قرار الفائدة','date':ds,'time':ts,
-                             'impact':'🔴 عالي جداً','desc':f'بعد {diff} يوم'}); break
-    d = now.replace(day=1)
-    while d.weekday() != 4: d += timedelta(days=1)
-    if d.date() >= now.date():
-        results.append({'title':'NFP — Non-Farm Payrolls','date':d.strftime('%Y-%m-%d'),
-                         'time':'15:30','impact':'🔴 عالي جداً','desc':'أول جمعة الشهر'})
-    thu = now + timedelta(days=(3-now.weekday())%7 or 7)
-    results.append({'title':'Jobless Claims','date':thu.strftime('%Y-%m-%d'),
-                     'time':'15:30','impact':'🟠 متوسط','desc':'كل خميس'})
-    results.sort(key=lambda x:x.get('date',''))
-    return results[:8]
+        d=datetime.strptime(ds,'%Y-%m-%d').replace(tzinfo=timezone.utc)
+        if d>=now:
+            diff=(d.date()-now.date()).days
+            results.append({'title':'FOMC — قرار الفائدة','date':ds,'time':ts,'impact':'🔴 عالي جداً','desc':f'بعد {diff} يوم'}); break
+    d=now.replace(day=1)
+    while d.weekday()!=4: d+=timedelta(days=1)
+    if d.date()>=now.date():
+        results.append({'title':'NFP — Non-Farm Payrolls','date':d.strftime('%Y-%m-%d'),'time':'15:30','impact':'🔴 عالي جداً','desc':'أول جمعة الشهر'})
+    thu=now+timedelta(days=(3-now.weekday())%7 or 7)
+    results.append({'title':'Jobless Claims','date':thu.strftime('%Y-%m-%d'),'time':'15:30','impact':'🟠 متوسط','desc':'كل خميس'})
+    results.sort(key=lambda x:x.get('date','')); return results[:8]
 
 
 def main_keyboard():
@@ -4248,40 +4187,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "correlation":
         await query.message.reply_text("⏳ جاري تحليل العلاقة الثلاثية...", reply_markup=main_keyboard())
         try:
-            loop   = asyncio.get_event_loop()
-            result = await asyncio.wait_for(loop.run_in_executor(None, get_triple_analysis), timeout=25.0)
+            loop=asyncio.get_event_loop()
+            result=await asyncio.wait_for(loop.run_in_executor(None,get_triple_analysis),timeout=25.0)
             if not result:
-                await query.message.reply_text("❌ فشل جلب البيانات.", reply_markup=main_keyboard())
+                await query.message.reply_text("❌ فشل جلب البيانات.",reply_markup=main_keyboard())
             else:
-                img = await loop.run_in_executor(None, generate_triple_chart, result)
+                img=await loop.run_in_executor(None,generate_triple_chart,result)
                 if img:
-                    await query.message.reply_photo(photo=img, caption="📊 ذهب / DXY / جنيه — آخر 30 يوم", reply_markup=main_keyboard())
-                await query.message.reply_text(fmt_triple_msg(result), parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
+                    await query.message.reply_photo(photo=img,caption="📊 ذهب / DXY / جنيه — آخر 30 يوم",reply_markup=main_keyboard())
+                await query.message.reply_text(fmt_triple_msg(result),parse_mode=ParseMode.HTML,reply_markup=main_keyboard())
         except asyncio.TimeoutError:
-            await query.message.reply_text("⏱ انتهت المهلة — جرب تاني.", reply_markup=main_keyboard())
+            await query.message.reply_text("⏱ انتهت المهلة.",reply_markup=main_keyboard())
         except Exception as e:
-            await query.message.reply_text(f"❌ خطأ: {str(e)[:100]}", reply_markup=main_keyboard())
+            await query.message.reply_text(f"❌ خطأ: {str(e)[:100]}",reply_markup=main_keyboard())
 
     elif data == "calendar":
-        await query.message.reply_text("⏳ جاري جلب الأحداث الاقتصادية...", reply_markup=main_keyboard())
+        await query.message.reply_text("⏳ جاري جلب الأحداث الاقتصادية...",reply_markup=main_keyboard())
         try:
-            loop   = asyncio.get_event_loop()
-            events = await asyncio.wait_for(loop.run_in_executor(None, get_economic_calendar), timeout=12.0)
-            lines  = ["📰 الأحداث الاقتصادية المؤثرة على الذهب", ""]
+            loop=asyncio.get_event_loop()
+            events=await asyncio.wait_for(loop.run_in_executor(None,get_economic_calendar),timeout=12.0)
+            lines=["📰 الأحداث الاقتصادية المؤثرة على الذهب",""]
             for e in events:
                 try:
-                    diff = (datetime.strptime(e['date'],'%Y-%m-%d').date() - datetime.now(timezone.utc).date()).days
-                    dl   = 'اليوم' if diff==0 else 'غداً' if diff==1 else f'بعد {diff} يوم' if diff>0 else f'منذ {abs(diff)} يوم'
-                except Exception: dl = e.get('date','')
+                    diff=(datetime.strptime(e['date'],'%Y-%m-%d').date()-datetime.now(timezone.utc).date()).days
+                    dl='اليوم' if diff==0 else 'غداً' if diff==1 else f'بعد {diff} يوم' if diff>0 else f'منذ {abs(diff)} يوم'
+                except Exception: dl=e.get('date','')
                 lines.append(f"{e['impact']} {e['title']}")
                 lines.append(f"   📅 {e['date']}  ⏰ {e['time']} GMT+2  ({dl})")
                 if e.get('desc'): lines.append(f"   💬 {e['desc']}")
                 lines.append("")
-            lines += ["─────────────────","الأقوى: FOMC → CPI/PCE → NFP",
-                      f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2"]
-            await query.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
+            lines+=["─────────────","الأقوى: FOMC → CPI/PCE → NFP",f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2"]
+            await query.message.reply_text("\n".join(lines),parse_mode=ParseMode.HTML,reply_markup=main_keyboard())
         except Exception as e:
-            await query.message.reply_text(f"❌ خطأ: {str(e)[:100]}", reply_markup=main_keyboard())
+            await query.message.reply_text(f"❌ خطأ: {str(e)[:100]}",reply_markup=main_keyboard())
 
     elif data == "egypt":
         await query.message.reply_text("⏳ جاري جلب أسعار الذهب المصري...",
