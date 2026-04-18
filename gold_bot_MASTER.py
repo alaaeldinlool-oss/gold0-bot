@@ -1388,9 +1388,8 @@ def get_triple_analysis() -> dict:
         except Exception as e:
             log.warning(f"stooq DXY error: {e}")
 
-        # المصدر الثاني: احسب DXY من الصيغة الحقيقية مع normalization
+        # المصدر الثاني: احسب DXY من الصيغة الحقيقية مع auto-calibration
         # ICE DXY = 50.14348112 × EUR^-0.576 × JPY^0.136 × GBP^-0.119 × CAD^0.091 × CHF^0.036
-        # الصيغة بتدي ~90-91 بدل ~98-99 — محتاجين factor تصحيح = 1.092
         if not dxy_closes or dxy_closes[-1] < 50:
             try:
                 pairs = {
@@ -1414,19 +1413,42 @@ def get_triple_analysis() -> dict:
 
                 if len(basket_data) >= 3:
                     min_len = min(len(v[0]) for v in basket_data.values())
-                    dxy_calc = []
-                    for i in range(min_len):
+
+                    # احسب DXY الخام لآخر يوم
+                    def calc_dxy_raw(idx):
                         val = 50.14348112
                         for key, (closes, exp) in basket_data.items():
-                            if i < len(closes):
-                                val *= (closes[i] ** exp)
-                        # normalization factor عشان نوصل للـ range الصح (~95-105)
-                        val = round(val * 1.092, 3)
-                        dxy_calc.append(val)
+                            if idx < len(closes):
+                                val *= (closes[idx] ** exp)
+                        return val
+
+                    # جيب السعر الحالي لـ EUR/USD لنحسب DXY الفعلي تقريباً
+                    # DXY الحقيقي يمكن نقدره من EUR/USD فقط (57.6% من الوزن)
+                    # EUR/USD ≈ 1/((DXY/100)^(1/0.576) * 0.3345)
+                    # الأبسط: نعمل auto-calibration من آخر قيمة محسوبة
+                    raw_last = calc_dxy_raw(min_len - 1)
+
+                    # DXY الحقيقي = EUR/USD * factor معروف
+                    # نستخدم EUR/USD الحالي نحسب DXY تقريبي
+                    try:
+                        eur_now = basket_data['EUR/USD'][0][-1]
+                        # علاقة تقريبية: DXY ≈ 100 × (1.235 / EUR/USD)^0.576
+                        # حيث 1.235 هو EUR/USD baseline عند DXY=100
+                        dxy_reference = 100.0 * (1.2235 / eur_now) ** 0.576
+                        calib_factor  = dxy_reference / raw_last
+                        log.info(f"DXY calibration: raw={raw_last:.2f}, ref={dxy_reference:.2f}, factor={calib_factor:.4f}")
+                    except Exception:
+                        calib_factor = 1.025  # fallback factor
+
+                    dxy_calc = []
+                    for i in range(min_len):
+                        val = calc_dxy_raw(i) * calib_factor
+                        dxy_calc.append(round(val, 3))
+
                     if dxy_calc and 85 < dxy_calc[-1] < 120:
                         dxy_closes = dxy_calc
-                        dxy_label  = 'DXY (محسوب)'
-                        log.info(f"DXY calculated+normalized: {dxy_closes[-1]:.2f}")
+                        dxy_label  = 'DXY (calc)'
+                        log.info(f"DXY calibrated: {dxy_closes[-1]:.2f}")
             except Exception as e:
                 log.warning(f"DXY formula error: {e}")
 
