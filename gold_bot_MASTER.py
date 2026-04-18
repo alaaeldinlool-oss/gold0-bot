@@ -1158,57 +1158,177 @@ def get_correlation_data() -> dict:
 
 
 def get_economic_calendar() -> list:
-    """جيب أهم أحداث الأسبوع المؤثرة على الذهب"""
-    # أحداث ثابتة أسبوعياً — بنحدثها يدوياً أو من API
-    try:
-        import requests as req
-        # نجرب API مجاني للأحداث الاقتصادية
-        url = "https://economic-calendar.tradingview.com/events"
-        params = {
-            'from': datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00'),
-            'to':   (datetime.now(timezone.utc) + timedelta(days=7)).strftime('%Y-%m-%dT00:00:00'),
-            'countries': 'US,EU,GB',
-        }
-        r = req.get(url, params=params, timeout=5)
-        if r.status_code == 200:
-            events = r.json().get('result', [])
-            # فلتر الأحداث ذات التأثير العالي على الذهب
-            high_impact = []
-            gold_keywords = ['CPI', 'NFP', 'GDP', 'Fed', 'FOMC', 'Interest Rate',
-                           'Inflation', 'PPI', 'Unemployment', 'PMI', 'Retail']
-            for e in events[:50]:
-                title = e.get('title', '')
-                if (e.get('importance', 0) >= 2 and
-                    any(kw.lower() in title.lower() for kw in gold_keywords)):
-                    high_impact.append({
-                        'title':  title,
-                        'date':   e.get('date', ''),
-                        'country': e.get('country', ''),
-                        'importance': e.get('importance', 1),
-                    })
-            if high_impact:
-                return high_impact[:8]
-    except Exception:
-        pass
+    """جيب الأحداث الاقتصادية بتواريخ وتوقيتات حقيقية"""
+    now     = datetime.now(timezone.utc)
+    results = []
 
-    # Fallback: أحداث ثابتة أسبوعياً
-    now = datetime.now(timezone.utc)
-    weekday = now.weekday()
-    events = [
-        {'title': 'NFP (Non-Farm Payrolls)', 'day': 'الجمعة الأولى من الشهر',
-         'impact': '🔴 عالي', 'desc': 'يؤثر مباشرة على الذهب'},
-        {'title': 'CPI (التضخم الأمريكي)', 'day': 'الأربعاء',
-         'impact': '🔴 عالي', 'desc': 'محرك رئيسي للذهب'},
-        {'title': 'FOMC Meeting', 'day': '8 مرات سنوياً',
-         'impact': '🔴 عالي جداً', 'desc': 'قرار الفائدة الأمريكية'},
-        {'title': 'GDP الأمريكي', 'day': 'ربع سنوي',
-         'impact': '🟠 متوسط', 'desc': 'يؤثر على قوة الدولار'},
-        {'title': 'Initial Jobless Claims', 'day': 'الخميس',
-         'impact': '🟡 منخفض', 'desc': 'مؤشر سوق العمل'},
-        {'title': 'PPI (أسعار المنتجين)', 'day': 'الثلاثاء/الأربعاء',
-         'impact': '🟠 متوسط', 'desc': 'مؤشر تضخم مبكر'},
+    # المصدر الأول: forexfactory calendar
+    try:
+        from_date = now.strftime('%b%d.%Y').lower()
+        to_date   = (now + timedelta(days=7)).strftime('%b%d.%Y').lower()
+        url = f"https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+        r   = requests.get(url, timeout=8, headers={'User-Agent': 'Mozilla/5.0'})
+        if r.status_code == 200:
+            events = r.json()
+            gold_kw = ['CPI', 'NFP', 'Non-Farm', 'GDP', 'FOMC', 'Fed', 'Interest Rate',
+                      'Inflation', 'PPI', 'Unemployment', 'Jobless', 'PCE', 'Retail Sales',
+                      'ISM', 'PMI', 'Core']
+            for e in events:
+                if e.get('country') != 'USD':
+                    continue
+                title    = e.get('title', '')
+                impact   = e.get('impact', '')
+                date_str = e.get('date', '')
+                time_str = e.get('time', '')
+
+                if impact not in ('High', 'Medium'):
+                    continue
+                if not any(kw.lower() in title.lower() for kw in gold_kw):
+                    continue
+
+                # تحويل التوقيت لـ GMT+2
+                try:
+                    if time_str and time_str != 'Tentative' and time_str != 'All Day':
+                        dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%dT%H:%M:%S%z")
+                        local_time = (dt + timedelta(hours=2)).strftime('%H:%M')
+                        local_date = (dt + timedelta(hours=2)).strftime('%Y-%m-%d')
+                    else:
+                        local_date = date_str[:10] if date_str else ''
+                        local_time = 'غير محدد'
+                except Exception:
+                    local_date = date_str[:10] if date_str else ''
+                    local_time = time_str or 'غير محدد'
+
+                imp_icon = '🔴' if impact == 'High' else '🟠'
+                results.append({
+                    'title':   title,
+                    'date':    local_date,
+                    'time':    local_time,
+                    'impact':  f"{imp_icon} {'عالي' if impact=='High' else 'متوسط'}",
+                    'country': 'US',
+                })
+
+            if results:
+                results.sort(key=lambda x: (x['date'], x['time']))
+                return results[:10]
+    except Exception as e:
+        log.warning(f"FF calendar error: {e}")
+
+    # المصدر الثاني: Investing.com calendar scraping
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0',
+            'X-Requested-With': 'XMLHttpRequest',
+        }
+        from_ts = int(now.timestamp())
+        to_ts   = int((now + timedelta(days=7)).timestamp())
+        url = f"https://sbcharts.investing.com/events_charts/us/calendar_{from_ts}_{to_ts}.json"
+        r   = requests.get(url, headers=headers, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            gold_kw = ['CPI', 'NFP', 'GDP', 'Fed', 'FOMC', 'Interest',
+                      'Inflation', 'PPI', 'Jobless', 'PCE', 'Retail']
+            for e in (data if isinstance(data, list) else data.get('data', [])):
+                title  = str(e.get('name', '') or e.get('event', ''))
+                if not any(kw.lower() in title.lower() for kw in gold_kw):
+                    continue
+                results.append({
+                    'title':  title,
+                    'date':   str(e.get('date', ''))[:10],
+                    'time':   str(e.get('time', 'غير محدد')),
+                    'impact': '🔴 عالي',
+                    'country': 'US',
+                })
+            if results:
+                return results[:10]
+    except Exception as e:
+        log.warning(f"Investing calendar error: {e}")
+
+    # Fallback: أحداث الأسبوع الحالي محسوبة بالتواريخ الفعلية
+    results = []
+    # NFP — أول جمعة من كل شهر
+    first_friday = now.replace(day=1)
+    while first_friday.weekday() != 4:
+        first_friday += timedelta(days=1)
+    if first_friday >= now:
+        results.append({
+            'title':  'NFP — Non-Farm Payrolls',
+            'date':   first_friday.strftime('%Y-%m-%d'),
+            'time':   '15:30',
+            'impact': '🔴 عالي جداً',
+            'desc':   'أهم بيانات سوق العمل — تحرك مباشر للذهب',
+        })
+
+    # FOMC — المقررة 28-29 أبريل 2026
+    fomc_dates = [
+        ('2026-04-29', '21:00', 'FOMC — قرار الفائدة الأمريكية'),
+        ('2026-06-11', '21:00', 'FOMC — قرار الفائدة الأمريكية'),
+        ('2026-07-30', '21:00', 'FOMC — قرار الفائدة الأمريكية'),
+        ('2026-09-17', '21:00', 'FOMC — قرار الفائدة الأمريكية'),
     ]
-    return events
+    for date_str, time_str, title in fomc_dates:
+        event_date = datetime.strptime(date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+        if event_date >= now:
+            days_left = (event_date - now).days
+            results.append({
+                'title':  title,
+                'date':   date_str,
+                'time':   time_str,
+                'impact': '🔴 عالي جداً',
+                'desc':   f'بعد {days_left} يوم — أهم حدث للذهب',
+            })
+            if len(results) >= 2:
+                break
+
+    # CPI — ثاني أربعاء من كل شهر تقريباً
+    cpi_days = []
+    for month_offset in [0, 1]:
+        check = now.replace(day=1) + timedelta(days=31*month_offset)
+        check = check.replace(day=1)
+        wed_count = 0
+        for day in range(1, 32):
+            try:
+                d = check.replace(day=day)
+                if d.weekday() == 2:
+                    wed_count += 1
+                    if wed_count == 2:
+                        cpi_days.append(d)
+                        break
+            except Exception:
+                break
+
+    for d in cpi_days:
+        if d >= now:
+            results.append({
+                'title':  'CPI — مؤشر أسعار المستهلكين',
+                'date':   d.strftime('%Y-%m-%d'),
+                'time':   '15:30',
+                'impact': '🔴 عالي',
+                'desc':   'مؤشر التضخم الأمريكي — محرك رئيسي للذهب',
+            })
+            break
+
+    # PCE
+    results.append({
+        'title':  'Core PCE — مؤشر التضخم المفضل للفيدرالي',
+        'date':   'آخر الشهر',
+        'time':   '15:30',
+        'impact': '🔴 عالي',
+        'desc':   'الفيدرالي يعتمده لقرارات الفائدة',
+    })
+
+    # Jobless Claims
+    next_thu = now + timedelta(days=(3 - now.weekday()) % 7)
+    results.append({
+        'title':  'Initial Jobless Claims — طلبات البطالة',
+        'date':   next_thu.strftime('%Y-%m-%d'),
+        'time':   '15:30',
+        'impact': '🟠 متوسط',
+        'desc':   'كل خميس — مؤشر سوق العمل الأسبوعي',
+    })
+
+    results.sort(key=lambda x: x.get('date', '9999'))
+    return results[:8]
 
 
 def calc_correlation_desc(corr: float) -> str:
@@ -1251,66 +1371,72 @@ def get_triple_analysis() -> dict:
         dxy_closes = []
         dxy_label  = 'DXY'
 
-        # محاولة جيب DXY من TwelveData
-        dxy_symbols = ['DXY', 'USDX', 'DX-Y.NYB']
-        for sym in dxy_symbols:
-            try:
-                url = f"https://api.twelvedata.com/time_series?symbol={sym}&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
-                r   = requests.get(url, timeout=8)
-                d   = r.json()
-                if 'values' in d and len(d['values']) > 5:
-                    dxy_closes = [float(x['close']) for x in reversed(d['values'])]
-                    dxy_label  = f'DXY ({sym})'
-                    log.info(f"DXY from {sym}: {dxy_closes[-1]:.2f}")
-                    break
-            except Exception:
-                continue
+        # المصدر الأول: stooq.com (DXY حقيقي مجاني)
+        try:
+            import io as _io
+            import csv
+            url = "https://stooq.com/q/d/l/?s=dxy.f&i=d"
+            r   = requests.get(url, timeout=8, headers={'User-Agent': 'Mozilla/5.0'})
+            if r.status_code == 200 and 'Date' in r.text:
+                rows = list(csv.DictReader(_io.StringIO(r.text)))
+                rows = [row for row in rows if row.get('Close') and row['Close'] != 'null']
+                rows = rows[-30:]  # آخر 30 يوم
+                if len(rows) >= 5:
+                    dxy_closes = [float(row['Close']) for row in rows]
+                    dxy_label  = 'DXY'
+                    log.info(f"DXY from stooq: {dxy_closes[-1]:.2f}")
+        except Exception as e:
+            log.warning(f"stooq DXY error: {e}")
 
-        # Fallback: احسب DXY تقريبي من سلة العملات
-        # DXY = EUR(57.6%) + JPY(13.6%) + GBP(11.9%) + CAD(9.1%) + SEK(4.2%) + CHF(3.6%)
-        if not dxy_closes:
+        # المصدر الثاني: احسب DXY من الصيغة الحقيقية
+        # DXY = 50.14348112 × EUR/USD^-0.576 × USD/JPY^0.136 × GBP/USD^-0.119
+        #       × USD/CAD^0.091 × USD/SEK^0.042 × USD/CHF^0.036
+        if not dxy_closes or dxy_closes[-1] < 50:
             try:
-                basket = {
-                    'EUR/USD': -0.576,  # عكسي
-                    'USD/JPY':  0.136,
-                    'GBP/USD': -0.119,  # عكسي
-                    'USD/CAD':  0.091,
-                    'USD/CHF':  0.036,
+                pairs = {
+                    'EUR/USD': ('EUR/USD', -0.576),
+                    'USD/JPY': ('USD/JPY',  0.136),
+                    'GBP/USD': ('GBP/USD', -0.119),
+                    'USD/CAD': ('USD/CAD',  0.091),
+                    'USD/CHF': ('USD/CHF',  0.036),
                 }
                 basket_data = {}
-                for pair, weight in basket.items():
-                    url = f"https://api.twelvedata.com/time_series?symbol={pair}&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
-                    r   = requests.get(url, timeout=6)
-                    d   = r.json()
-                    if 'values' in d:
-                        closes = [float(x['close']) for x in reversed(d['values'])]
-                        basket_data[pair] = (closes, weight)
+                for key, (sym, exp) in pairs.items():
+                    try:
+                        url = f"https://api.twelvedata.com/time_series?symbol={sym}&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
+                        r   = requests.get(url, timeout=6)
+                        d   = r.json()
+                        if 'values' in d and len(d['values']) >= 5:
+                            closes = [float(x['close']) for x in reversed(d['values'])]
+                            basket_data[key] = (closes, exp)
+                    except Exception:
+                        pass
 
                 if len(basket_data) >= 3:
                     min_len = min(len(v[0]) for v in basket_data.values())
-                    dxy_approx = []
+                    dxy_calc = []
                     for i in range(min_len):
-                        val = 100.0
-                        for pair, (closes, weight) in basket_data.items():
-                            if weight < 0:  # EUR, GBP
-                                val += abs(weight) * (1/closes[i] - 1) * 100
-                            else:
-                                val += weight * (closes[i] - 1) * 100
-                        dxy_approx.append(val)
-                    dxy_closes = dxy_approx
-                    dxy_label  = 'DXY (محسوب)'
+                        val = 50.14348112
+                        for key, (closes, exp) in basket_data.items():
+                            if i < len(closes):
+                                val *= (closes[i] ** exp)
+                        dxy_calc.append(round(val, 3))
+                    if dxy_calc and 80 < dxy_calc[-1] < 130:
+                        dxy_closes = dxy_calc
+                        dxy_label  = 'DXY (محسوب)'
+                        log.info(f"DXY calculated: {dxy_closes[-1]:.2f}")
             except Exception as e:
-                log.warning(f"DXY basket error: {e}")
+                log.warning(f"DXY formula error: {e}")
 
-        # آخر fallback: USD/JPY كمؤشر اتجاه
-        if not dxy_closes:
+        # آخر fallback: USD/JPY كمؤشر اتجاه فقط
+        if not dxy_closes or dxy_closes[-1] < 50:
             try:
                 url = f"https://api.twelvedata.com/time_series?symbol=USD/JPY&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
                 r   = requests.get(url, timeout=8)
                 d   = r.json()
                 if 'values' in d:
                     dxy_closes = [float(x['close']) for x in reversed(d['values'])]
-                    dxy_label  = 'USD/JPY (بديل DXY)'
+                    dxy_label  = 'USD/JPY (اتجاه الدولار)'
             except Exception:
                 dxy_closes = []
 
@@ -3511,38 +3637,61 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             loop   = asyncio.get_event_loop()
             events = await asyncio.wait_for(
                 loop.run_in_executor(None, get_economic_calendar),
-                timeout=10.0
+                timeout=12.0
             )
-            lines = [
+            now_str = now_local().strftime('%Y-%m-%d')
+            lines   = [
                 f"📰 الأحداث الاقتصادية المؤثرة على الذهب",
+                f"🗓 الأسبوع الحالي + القادم",
                 f"",
             ]
             for e in events:
-                if 'impact' in e:
-                    # Fallback events
-                    lines += [
-                        f"{e['impact']} {e['title']}",
-                        f"   📅 {e['day']}",
-                        f"   {e['desc']}",
-                        f"",
-                    ]
-                else:
-                    # API events
-                    imp = '🔴' if e.get('importance',1) >= 3 else '🟠' if e.get('importance',1) >= 2 else '🟡'
-                    lines += [
-                        f"{imp} {e['title']} ({e.get('country','')})",
-                        f"   📅 {e.get('date','')[:10]}",
-                        f"",
-                    ]
+                date  = e.get('date', '')
+                time_ = e.get('time', '')
+                title = e.get('title', '')
+                imp   = e.get('impact', '🟡')
+                desc  = e.get('desc', '')
+
+                # حساب كم يوم باقي
+                try:
+                    if date and date != 'آخر الشهر' and len(date) == 10:
+                        ev_date = datetime.strptime(date, '%Y-%m-%d')
+                        diff = (ev_date.date() - datetime.now(timezone.utc).date()).days
+                        if diff == 0:
+                            day_lbl = 'اليوم'
+                        elif diff == 1:
+                            day_lbl = 'غداً'
+                        elif diff < 0:
+                            day_lbl = f'قبل {abs(diff)} يوم'
+                        else:
+                            day_lbl = f'بعد {diff} يوم'
+                    else:
+                        day_lbl = date
+                except Exception:
+                    day_lbl = date
+
+                # عرض الحدث
+                lines.append(f"{imp} {title}")
+                if date and time_:
+                    lines.append(f"   📅 {date}  ⏰ {time_} GMT+2  ({day_lbl})")
+                elif date:
+                    lines.append(f"   📅 {date}  ({day_lbl})")
+                if desc:
+                    lines.append(f"   💬 {desc}")
+                lines.append("")
+
             lines += [
-                f"💡 الأحداث الأهم للذهب:",
-                f"  🔴 FOMC — قرار الفائدة",
-                f"  🔴 CPI — بيانات التضخم",
-                f"  🔴 NFP — الوظائف الأمريكية",
-                f"",
+                "─────────────────",
+                "💡 الأقوى تأثيراً على الذهب:",
+                "  🔴 FOMC — قرار الفائدة (الأهم)",
+                "  🔴 CPI/PCE — التضخم",
+                "  🔴 NFP — الوظائف (أول جمعة الشهر)",
+                "",
                 f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2",
             ]
             text = '\n'.join(lines)
+        except asyncio.TimeoutError:
+            text = "⏱ انتهت المهلة — جرب تاني."
         except Exception as e:
             text = f"❌ خطأ: {str(e)[:100]}"
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
