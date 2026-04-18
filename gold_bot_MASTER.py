@@ -2460,7 +2460,6 @@ def _ai_call(prompt: str, max_tokens: int = 700) -> str:
 
     raise ValueError(f"كل AI engines فشلت: {' | '.join(errors[:3])}")
 
-
 # ════════════════════════════════════════════════════════════════
 #  ASTRO + GANN TIME ANALYSIS
 # ════════════════════════════════════════════════════════════════
@@ -4211,14 +4210,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _hf     = os.getenv("HF_KEY", HF_KEY_DEFAULT)
         if not _or and not _cohere and not _hf:
             text = ("🤖 AI التحليل\n\n❌ غير مفعّل\n\n"
-                    "عندك في Railway:\n"
-                    "OPENROUTER_KEY ✅\n"
-                    "COHERE_KEY ✅\n\n"
-                    "تأكد إن القيم صح وأعد Deploy")
+                    "أضف في Railway Variables:\n"
+                    "OPENROUTER_KEY أو COHERE_KEY")
         else:
             try:
-                await query.message.reply_text("⏳ جاري التحليل بالذكاء الاصطناعي...",
-                                               reply_markup=main_keyboard())
+                await query.message.reply_text(
+                    f"⏳ جاري التحليل...\n"
+                    f"OR={'✅' if _or else '❌'}  "
+                    f"Cohere={'✅' if _cohere else '❌'}  "
+                    f"HF={'✅' if _hf else '❌'}",
+                    reply_markup=main_keyboard()
+                )
                 d = fetch_ohlcv_cached("1h", 200)
                 if not d:
                     text = "❌ فشل جلب البيانات."
@@ -4226,7 +4228,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     sig  = full_analysis(d)
                     text = await claude_analysis(sig)
             except Exception as e:
-                text = f"❌ خطأ في AI: {str(e)[:100]}"
+                text = f"❌ خطأ في AI:\n{str(e)[:200]}"
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
