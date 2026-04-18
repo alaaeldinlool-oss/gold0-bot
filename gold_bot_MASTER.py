@@ -174,7 +174,7 @@ TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e
 GROQ_KEY        = os.getenv("GROQ_KEY", "")
 
 # OpenRouter API Key (بديل Groq — openrouter.ai)
-OPENROUTER_KEY  = os.getenv("OPENROUTER_KEY", "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")
+OPENROUTER_KEY  = os.getenv("OPENROUTER_KEY", "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")
 
 # Cohere API Key (بديل تاني — cohere.com)
 COHERE_KEY      = os.getenv("COHERE_KEY", "0xoiLo7FMswnN5KZd5nK98Q4wiRZBBdNbZXMnyei")
