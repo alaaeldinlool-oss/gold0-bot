@@ -111,7 +111,11 @@ except ImportError:
     HAS_TA = False
     print("⚠️  ta library not found — using built-in indicators")
 
-HAS_OPENROUTER = True  # يعمل بـ requests العادية — لا حاجة لمكتبة خارجية
+try:
+    from groq import Groq
+    HAS_GROQ = True
+except ImportError:
+    HAS_GROQ = False
 
 try:
     from pymongo import MongoClient
@@ -166,14 +170,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1Ow
 # TwelveData API Key — twelvedata.com (free plan: 800 req/day)
 TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e")
 
-# OpenRouter API Key (fallback)
-OPENROUTER_KEY  = os.getenv("OPENROUTER_KEY", "")
-
-# Cohere API Key (مجاني — من dashboard.cohere.com)
-COHERE_KEY_DEFAULT = os.getenv("COHERE_KEY", "0xoiLo7FMswnN5KZd5nK98Q4wiRZBBdNbZXMnyei")
-
-# Hugging Face API Key (مجاني — من huggingface.co/settings/tokens)
-HF_KEY_DEFAULT  = os.getenv("HF_KEY", "")
+# Groq API Key (مجاني — من console.groq.com)
+GROQ_KEY        = os.getenv("GROQ_KEY",        "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")
 
 # MongoDB URI (لحفظ الإشارات والإحصائيات)
 MONGODB_URI     = os.getenv("MONGODB_URI",     "mongodb+srv://alaaeldinlool_db_user:97sJMDccaJjmszje@cluster0.oufdfub.mongodb.net/?appName=Cluster0")
@@ -312,7 +310,7 @@ def get_stats(chat_id: int) -> dict:
 #  KEEP-ALIVE — يمنع Render من إيقاف البوت
 # ════════════════════════════════════════════════════════════════
 def keep_alive():
-    """سيرفر صغير يمنع Render من إيقاف البوت"""
+    """سيرفر صغير يمنع الإيقاف — يشتغل على Render و Railway"""
     try:
         from http.server import HTTPServer, BaseHTTPRequestHandler
         import json
@@ -323,14 +321,19 @@ def keep_alive():
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
                 status = {
-                    'status': 'alive',
-                    'bot': 'Gold Master Bot',
-                    'time': now_local().strftime('%Y-%m-%d %H:%M:%S GMT+2'),
+                    'status':      'alive',
+                    'bot':         'Gold Master Bot',
+                    'time':        now_local().strftime('%Y-%m-%d %H:%M:%S GMT+2'),
                     'subscribers': len(alert_subscribers),
+                    'uptime':      'running',
                 }
-                self.wfile.write(json.dumps(status).encode())
+                self.wfile.write(json.dumps(status, ensure_ascii=False).encode())
+            def do_HEAD(self):
+                self.send_response(200)
+                self.end_headers()
             def log_message(self, *args): pass
 
+        # Railway بيحدد PORT تلقائياً، Render كمان
         port = int(os.environ.get('PORT', 8080))
         server = HTTPServer(('0.0.0.0', port), Handler)
         log.info(f'Keep-alive server on port {port}')
@@ -1101,6 +1104,430 @@ def analyze_patterns_mtf() -> dict:
         except Exception as e:
             log.warning(f"Pattern MTF {key} error: {e}")
     return results
+
+
+def get_correlation_data() -> dict:
+    """جيب بيانات الارتباط بين الذهب والدولار والنفط والفضة"""
+    results = {}
+    symbols = {
+        'DXY':   ('USD/JPY', 'الدولار (DXY)'),
+        'OIL':   ('XBR/USD', 'النفط'),
+        'SILVER':('XAG/USD', 'الفضة'),
+        'SP500': ('SPX',     'S&P 500'),
+    }
+    try:
+        # جيب الذهب
+        gold = fetch_ohlcv_cached('1day', 30)
+        if not gold:
+            return {}
+        gold_returns = [gold['close'][i]/gold['close'][i-1]-1
+                        for i in range(1, len(gold['close']))]
+
+        for key, (symbol, label) in symbols.items():
+            try:
+                url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
+                r   = requests.get(url, timeout=6)
+                d   = r.json()
+                if 'values' not in d:
+                    continue
+                closes  = [float(x['close']) for x in reversed(d['values'])]
+                returns = [closes[i]/closes[i-1]-1 for i in range(1, len(closes))]
+                n = min(len(gold_returns), len(returns))
+                if n < 5:
+                    continue
+                gr = gold_returns[-n:]
+                sr = returns[-n:]
+                # Pearson correlation
+                mean_g = sum(gr)/n
+                mean_s = sum(sr)/n
+                num = sum((gr[i]-mean_g)*(sr[i]-mean_s) for i in range(n))
+                den = (sum((gr[i]-mean_g)**2 for i in range(n)) *
+                       sum((sr[i]-mean_s)**2 for i in range(n))) ** 0.5
+                corr = num/den if den else 0
+                results[key] = {
+                    'label':  label,
+                    'corr':   round(corr, 3),
+                    'price':  closes[-1],
+                    'change': round((closes[-1]/closes[-2]-1)*100, 2) if len(closes)>1 else 0,
+                }
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning(f"correlation error: {e}")
+    return results
+
+
+def get_economic_calendar() -> list:
+    """جيب أهم أحداث الأسبوع المؤثرة على الذهب"""
+    # أحداث ثابتة أسبوعياً — بنحدثها يدوياً أو من API
+    try:
+        import requests as req
+        # نجرب API مجاني للأحداث الاقتصادية
+        url = "https://economic-calendar.tradingview.com/events"
+        params = {
+            'from': datetime.now(timezone.utc).strftime('%Y-%m-%dT00:00:00'),
+            'to':   (datetime.now(timezone.utc) + timedelta(days=7)).strftime('%Y-%m-%dT00:00:00'),
+            'countries': 'US,EU,GB',
+        }
+        r = req.get(url, params=params, timeout=5)
+        if r.status_code == 200:
+            events = r.json().get('result', [])
+            # فلتر الأحداث ذات التأثير العالي على الذهب
+            high_impact = []
+            gold_keywords = ['CPI', 'NFP', 'GDP', 'Fed', 'FOMC', 'Interest Rate',
+                           'Inflation', 'PPI', 'Unemployment', 'PMI', 'Retail']
+            for e in events[:50]:
+                title = e.get('title', '')
+                if (e.get('importance', 0) >= 2 and
+                    any(kw.lower() in title.lower() for kw in gold_keywords)):
+                    high_impact.append({
+                        'title':  title,
+                        'date':   e.get('date', ''),
+                        'country': e.get('country', ''),
+                        'importance': e.get('importance', 1),
+                    })
+            if high_impact:
+                return high_impact[:8]
+    except Exception:
+        pass
+
+    # Fallback: أحداث ثابتة أسبوعياً
+    now = datetime.now(timezone.utc)
+    weekday = now.weekday()
+    events = [
+        {'title': 'NFP (Non-Farm Payrolls)', 'day': 'الجمعة الأولى من الشهر',
+         'impact': '🔴 عالي', 'desc': 'يؤثر مباشرة على الذهب'},
+        {'title': 'CPI (التضخم الأمريكي)', 'day': 'الأربعاء',
+         'impact': '🔴 عالي', 'desc': 'محرك رئيسي للذهب'},
+        {'title': 'FOMC Meeting', 'day': '8 مرات سنوياً',
+         'impact': '🔴 عالي جداً', 'desc': 'قرار الفائدة الأمريكية'},
+        {'title': 'GDP الأمريكي', 'day': 'ربع سنوي',
+         'impact': '🟠 متوسط', 'desc': 'يؤثر على قوة الدولار'},
+        {'title': 'Initial Jobless Claims', 'day': 'الخميس',
+         'impact': '🟡 منخفض', 'desc': 'مؤشر سوق العمل'},
+        {'title': 'PPI (أسعار المنتجين)', 'day': 'الثلاثاء/الأربعاء',
+         'impact': '🟠 متوسط', 'desc': 'مؤشر تضخم مبكر'},
+    ]
+    return events
+
+
+def calc_correlation_desc(corr: float) -> str:
+    """وصف الارتباط"""
+    if corr >= 0.7:   return '🟢 ارتباط موجب قوي'
+    if corr >= 0.3:   return '🟡 ارتباط موجب ضعيف'
+    if corr >= -0.3:  return '⚪ لا ارتباط يذكر'
+    if corr >= -0.7:  return '🟠 ارتباط سالب ضعيف'
+    return '🔴 ارتباط سالب قوي (عكسي)'
+
+
+def get_triple_analysis() -> dict:
+    """تحليل العلاقة الثلاثية: ذهب / دولار / جنيه"""
+    try:
+        result = {}
+
+        # 1. الذهب XAU/USD
+        gold_d = fetch_ohlcv_cached('1day', 30)
+        if not gold_d or not gold_d.get('close'):
+            return {}
+        gold_closes = gold_d['close'][-30:]
+        gold_dates  = [t[:10] for t in gold_d['time'][-30:]]
+
+        # 2. دولار/جنيه USD/EGP
+        try:
+            url = f"https://api.twelvedata.com/time_series?symbol=USD/EGP&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
+            r   = requests.get(url, timeout=8)
+            d   = r.json()
+            if 'values' in d:
+                egp_closes = [float(x['close']) for x in reversed(d['values'])]
+                egp_dates  = [x['datetime'][:10] for x in reversed(d['values'])]
+            else:
+                egp_closes = []
+                egp_dates  = []
+        except Exception:
+            egp_closes = []
+            egp_dates  = []
+
+        # 3. مؤشر الدولار DXY الحقيقي
+        dxy_closes = []
+        dxy_label  = 'DXY'
+
+        # محاولة جيب DXY من TwelveData
+        dxy_symbols = ['DXY', 'USDX', 'DX-Y.NYB']
+        for sym in dxy_symbols:
+            try:
+                url = f"https://api.twelvedata.com/time_series?symbol={sym}&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
+                r   = requests.get(url, timeout=8)
+                d   = r.json()
+                if 'values' in d and len(d['values']) > 5:
+                    dxy_closes = [float(x['close']) for x in reversed(d['values'])]
+                    dxy_label  = f'DXY ({sym})'
+                    log.info(f"DXY from {sym}: {dxy_closes[-1]:.2f}")
+                    break
+            except Exception:
+                continue
+
+        # Fallback: احسب DXY تقريبي من سلة العملات
+        # DXY = EUR(57.6%) + JPY(13.6%) + GBP(11.9%) + CAD(9.1%) + SEK(4.2%) + CHF(3.6%)
+        if not dxy_closes:
+            try:
+                basket = {
+                    'EUR/USD': -0.576,  # عكسي
+                    'USD/JPY':  0.136,
+                    'GBP/USD': -0.119,  # عكسي
+                    'USD/CAD':  0.091,
+                    'USD/CHF':  0.036,
+                }
+                basket_data = {}
+                for pair, weight in basket.items():
+                    url = f"https://api.twelvedata.com/time_series?symbol={pair}&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
+                    r   = requests.get(url, timeout=6)
+                    d   = r.json()
+                    if 'values' in d:
+                        closes = [float(x['close']) for x in reversed(d['values'])]
+                        basket_data[pair] = (closes, weight)
+
+                if len(basket_data) >= 3:
+                    min_len = min(len(v[0]) for v in basket_data.values())
+                    dxy_approx = []
+                    for i in range(min_len):
+                        val = 100.0
+                        for pair, (closes, weight) in basket_data.items():
+                            if weight < 0:  # EUR, GBP
+                                val += abs(weight) * (1/closes[i] - 1) * 100
+                            else:
+                                val += weight * (closes[i] - 1) * 100
+                        dxy_approx.append(val)
+                    dxy_closes = dxy_approx
+                    dxy_label  = 'DXY (محسوب)'
+            except Exception as e:
+                log.warning(f"DXY basket error: {e}")
+
+        # آخر fallback: USD/JPY كمؤشر اتجاه
+        if not dxy_closes:
+            try:
+                url = f"https://api.twelvedata.com/time_series?symbol=USD/JPY&interval=1day&outputsize=30&apikey={TWELVEDATA_KEY}"
+                r   = requests.get(url, timeout=8)
+                d   = r.json()
+                if 'values' in d:
+                    dxy_closes = [float(x['close']) for x in reversed(d['values'])]
+                    dxy_label  = 'USD/JPY (بديل DXY)'
+            except Exception:
+                dxy_closes = []
+
+        # حساب الارتباطات
+        def pearson(a, b):
+            n = min(len(a), len(b))
+            if n < 5:
+                return 0
+            a, b = a[-n:], b[-n:]
+            ma, mb = sum(a)/n, sum(b)/n
+            num = sum((a[i]-ma)*(b[i]-mb) for i in range(n))
+            den = (sum((a[i]-ma)**2 for i in range(n)) *
+                   sum((b[i]-mb)**2 for i in range(n))) ** 0.5
+            return round(num/den, 3) if den else 0
+
+        # حساب التغييرات اليومية (returns)
+        def returns(prices):
+            return [prices[i]/prices[i-1]-1 for i in range(1, len(prices))]
+
+        gold_ret = returns(gold_closes)
+        egp_ret  = returns(egp_closes)  if len(egp_closes) > 1  else []
+        dxy_ret  = returns(dxy_closes)  if len(dxy_closes) > 1  else []
+
+        # آخر قيم
+        gold_now = gold_closes[-1]
+        gold_chg = (gold_closes[-1]/gold_closes[-2]-1)*100 if len(gold_closes) > 1 else 0
+        egp_now  = egp_closes[-1]  if egp_closes  else get_usd_egp() or 52.0
+        egp_chg  = (egp_closes[-1]/egp_closes[-2]-1)*100 if len(egp_closes) > 1 else 0
+        dxy_now  = dxy_closes[-1]  if dxy_closes  else 0
+        dxy_chg  = (dxy_closes[-1]/dxy_closes[-2]-1)*100 if len(dxy_closes) > 1 else 0
+
+        # الارتباط
+        corr_gold_egp = pearson(gold_ret, egp_ret) if egp_ret else 0
+        corr_gold_dxy = pearson(gold_ret, dxy_ret) if dxy_ret else 0
+        corr_egp_dxy  = pearson(egp_ret,  dxy_ret) if egp_ret and dxy_ret else 0
+
+        # سعر الذهب بالجنيه
+        gold_egp = round(gold_now * egp_now / 31.1035, 0)  # سعر الجرام عيار 24
+
+        result = {
+            'gold_closes': gold_closes,
+            'egp_closes':  egp_closes  if egp_closes  else [egp_now]*len(gold_closes),
+            'dxy_closes':  dxy_closes  if dxy_closes  else [],
+            'dates':       gold_dates,
+            'gold_now':    round(gold_now, 2),
+            'gold_chg':    round(gold_chg, 2),
+            'egp_now':     round(egp_now, 2),
+            'egp_chg':     round(egp_chg, 2),
+            'dxy_now':     round(dxy_now, 2),
+            'dxy_chg':     round(dxy_chg, 2),
+            'dxy_label':   dxy_label,
+            'gold_egp':    gold_egp,
+            'corr_gold_egp': corr_gold_egp,
+            'corr_gold_dxy': corr_gold_dxy,
+            'corr_egp_dxy':  corr_egp_dxy,
+        }
+        return result
+    except Exception as e:
+        log.error(f"get_triple_analysis error: {e}")
+        return {}
+
+
+def generate_triple_chart(data: dict) -> Optional[bytes]:
+    """رسم شارت العلاقة الرباعية: ذهب / دولار-جنيه / DXY / ارتباط"""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import matplotlib.gridspec as gridspec
+        import io
+
+        gold = data['gold_closes']
+        egp  = data['egp_closes']
+        dxy  = data['dxy_closes']
+        n    = min(len(gold), 30)
+        x    = list(range(n))
+
+        dates = data.get('dates', [])
+        lbl_start = dates[-n] if len(dates) >= n else ''
+        lbl_end   = dates[-1] if dates else ''
+
+        has_dxy = len(dxy) >= 5
+        rows    = 4 if has_dxy else 3
+        ratios  = [2, 1.5, 1.5, 1] if has_dxy else [2, 1.5, 1]
+
+        fig = plt.figure(figsize=(12, 10 if has_dxy else 8), facecolor='#1a1a2e')
+        gs  = gridspec.GridSpec(rows, 1, hspace=0.45, figure=fig,
+                                height_ratios=ratios)
+
+        def plot_line(ax, x_data, y_data, color, ylabel, title):
+            ax.set_facecolor('#16213e')
+            ax.plot(x_data, y_data, color=color, linewidth=2)
+            ax.fill_between(x_data, y_data, min(y_data), alpha=0.12, color=color)
+            ax.set_ylabel(ylabel, color=color, fontsize=8)
+            ax.tick_params(colors='#aaaaaa', labelsize=7)
+            ax.grid(color='#2a2a4a', alpha=0.4)
+            ax.set_title(title, color=color, fontsize=9, fontweight='bold', pad=4)
+            ax.set_xticks([])
+
+        # ── الذهب ──
+        ax1 = fig.add_subplot(gs[0])
+        g_d = gold[-n:]
+        plot_line(ax1, x, g_d, '#ffd700', 'XAU/USD $',
+                  f"Gold  {data['gold_now']:.2f}$  ({'+' if data['gold_chg']>=0 else ''}{data['gold_chg']:.2f}%)")
+
+        # ── USD/EGP ──
+        ax2 = fig.add_subplot(gs[1])
+        e_d = egp[-n:]
+        xn2 = list(range(len(e_d)))
+        plot_line(ax2, xn2, e_d, '#00d4aa', 'USD/EGP',
+                  f"USD/EGP  {data['egp_now']:.2f} جنيه  ({'+' if data['egp_chg']>=0 else ''}{data['egp_chg']:.2f}%)")
+
+        # ── DXY ──
+        if has_dxy:
+            ax3 = fig.add_subplot(gs[2])
+            d_d = dxy[-n:]
+            xn3 = list(range(len(d_d)))
+            dxy_lbl = data.get('dxy_label', 'DXY')
+            plot_line(ax3, xn3, d_d, '#ff6b6b', dxy_lbl,
+                      f"{dxy_lbl}  {data['dxy_now']:.2f}  ({'+' if data['dxy_chg']>=0 else ''}{data['dxy_chg']:.2f}%)")
+            corr_ax = fig.add_subplot(gs[3])
+        else:
+            corr_ax = fig.add_subplot(gs[2])
+
+        # ── الارتباطات ──
+        corr_ax.set_facecolor('#16213e')
+        labels = ['ذهب/جنيه', 'ذهب/DXY', 'جنيه/DXY']
+        corrs  = [data['corr_gold_egp'], data['corr_gold_dxy'], data['corr_egp_dxy']]
+        colors = ['#ffd700' if c >= 0 else '#ff4757' for c in corrs]
+        bars   = corr_ax.bar(labels, corrs, color=colors, width=0.5, zorder=2)
+        corr_ax.axhline(0, color='#888899', linewidth=1)
+        corr_ax.set_ylim(-1.1, 1.1)
+        corr_ax.set_ylabel('Corr', color='#aaaaaa', fontsize=8)
+        corr_ax.tick_params(colors='#e0e0e0', labelsize=8)
+        corr_ax.grid(axis='y', color='#2a2a4a', alpha=0.4)
+        corr_ax.set_title('الارتباط (آخر 30 يوم)', color='#e0e0e0', fontsize=9)
+        for bar, c in zip(bars, corrs):
+            corr_ax.text(bar.get_x() + bar.get_width()/2,
+                         c + (0.06 if c >= 0 else -0.12),
+                         f'{c:+.3f}', ha='center', color='#ffffff',
+                         fontsize=8, fontweight='bold')
+
+        fig.text(0.5, 0.01, f"{lbl_start}  ←  {lbl_end}",
+                 ha='center', color='#555577', fontsize=7)
+
+        plt.tight_layout(rect=[0, 0.03, 1, 1])
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=130, bbox_inches='tight', facecolor='#1a1a2e')
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
+    except Exception as e:
+        log.error(f"generate_triple_chart error: {e}")
+        return None
+
+
+def fmt_triple_msg(data: dict) -> str:
+    """رسالة تحليل العلاقة الرباعية"""
+    def corr_arrow(c):
+        if c >= 0.6:   return '🟢 موجب قوي'
+        if c >= 0.3:   return '🟡 موجب ضعيف'
+        if c >= -0.3:  return '⚪ لا ارتباط'
+        if c >= -0.6:  return '🟠 سالب ضعيف'
+        return '🔴 عكسي قوي'
+
+    def fmt_chg(v):
+        return f"+{v:.2f}%" if v >= 0 else f"{v:.2f}%"
+
+    cge = data['corr_gold_egp']
+    cgd = data['corr_gold_dxy']
+    ced = data['corr_egp_dxy']
+    dxy_lbl = data.get('dxy_label', 'DXY')
+    dxy_now = data['dxy_now']
+    dxy_chg = data['dxy_chg']
+
+    # تفسير العلاقة الحالية
+    if cgd <= -0.5:
+        interp_dxy = "DXY قوي = ضغط على الذهب"
+    elif cgd >= 0.5:
+        interp_dxy = "DXY والذهب يصعدان معاً (غير معتاد)"
+    else:
+        interp_dxy = "DXY والذهب متقطعا العلاقة حالياً"
+
+    if cge >= 0.4:
+        interp_egp = "جنيه يضعف = الذهب بالجنيه أغلى"
+    elif cge <= -0.4:
+        interp_egp = "جنيه يتحرك عكس الذهب"
+    else:
+        interp_egp = "الجنيه والذهب مستقلان حالياً"
+
+    lines = [
+        "🔗 العلاقة الرباعية: ذهب / DXY / جنيه",
+        f"آخر 30 يوم تداول",
+        "",
+        "💰 الأسعار الحالية:",
+        f"  🥇 الذهب:      {data['gold_now']:.2f}$  ({fmt_chg(data['gold_chg'])})",
+        f"  📊 {dxy_lbl}: {dxy_now:.2f}  ({fmt_chg(dxy_chg)})",
+        f"  💵 USD/EGP:   {data['egp_now']:.2f} جنيه  ({fmt_chg(data['egp_chg'])})",
+        f"  🏅 الجرام 24k: {data['gold_egp']:,.0f} جنيه",
+        "",
+        "📊 الارتباطات (آخر 30 يوم):",
+        f"  ذهب ↔ DXY:   {cgd:+.3f}  {corr_arrow(cgd)}",
+        f"  ذهب ↔ جنيه:  {cge:+.3f}  {corr_arrow(cge)}",
+        f"  DXY ↔ جنيه:  {ced:+.3f}  {corr_arrow(ced)}",
+        "",
+        "💡 التفسير الآن:",
+        f"  {interp_dxy}",
+        f"  {interp_egp}",
+        "",
+        "📌 القاعدة الذهبية:",
+        "  ↑ DXY (دولار قوي)  → ↓ ذهب بالدولار",
+        "  ↑ USD/EGP (جنيه ضعيف) → ↑ ذهب بالجنيه",
+        "  الجرام بالجنيه = ذهب$ × دولار/جنيه",
+        "",
+        f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2",
+    ]
+    return '\n'.join(lines)
 
 
 def calc_gann_square(price: float) -> dict:
@@ -2288,8 +2715,9 @@ async def send_weekly_report(context):
 
         # توقع AI
         ai_text = ""
-        if OPENROUTER_KEY:
+        if HAS_GROQ and GROQ_KEY:
             try:
+                client = Groq(api_key=GROQ_KEY)
                 prompt = (
                     f"أنت محلل ذهب محترف. بناءً على بيانات هذا الأسبوع:\n"
                     f"التغيير الإجمالي: {report['total_chg']:+.2f}$\n"
@@ -2297,9 +2725,14 @@ async def send_weekly_report(context):
                     f"نطاق الأسبوع: {report['week_range']:.2f}$\n"
                     f"قدم توقعك للأسبوع القادم في 3 جمل بالعربية."
                 )
-                ai_text = f"\n\n🤖 توقع AI للأسبوع القادم:\n{_ai_call(prompt, max_tokens=250)}"
-            except Exception as _e:
-                log.warning(f"OpenRouter weekly error: {_e}")
+                resp = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=200,
+                )
+                ai_text = f"\n\n🤖 توقع AI للأسبوع القادم:\n{resp.choices[0].message.content}"
+            except:
+                pass
 
         text = fmt_weekly_msg(report, prev) + ai_text
 
@@ -2346,567 +2779,61 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-
 # ════════════════════════════════════════════════════════════════
-#  AI ENGINE — Hugging Face Inference API (مجاني بدون قيود)
-# ════════════════════════════════════════════════════════════════
-
-# ════════════════════════════════════════════════════════════════
-#  AI ENGINE — Cohere (أولوية) + HF + OpenRouter (fallback)
+#  GROQ AI ANALYSIS (مجاني)
 # ════════════════════════════════════════════════════════════════
 
-def _ai_call(prompt: str, max_tokens: int = 700) -> str:
-    """
-    يستدعي AI API بالترتيب:
-    1. Cohere (مجاني — dashboard.cohere.com)
-    2. Hugging Face (مجاني — huggingface.co)
-    3. OpenRouter (fallback)
-    """
-    errors = []
-
-    # ── 1. Cohere ────────────────────────────────────────────
-    cohere_key = os.getenv("COHERE_KEY", COHERE_KEY_DEFAULT)
-    if cohere_key:
-        try:
-            resp = requests.post(
-                "https://api.cohere.com/v2/chat",
-                headers={
-                    "Authorization": f"Bearer {cohere_key}",
-                    "Content-Type":  "application/json",
-                },
-                json={
-                    "model":       "command-r-plus-08-2024",
-                    "messages":    [{"role": "user", "content": prompt}],
-                    "max_tokens":  max_tokens,
-                    "temperature": 0.4,
-                },
-                timeout=40,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["message"]["content"][0]["text"]
-        except Exception as e:
-            errors.append(f"Cohere: {e}")
-            log.warning(f"Cohere error: {e}")
-
-    # ── 2. Hugging Face ──────────────────────────────────────
-    hf_key = os.getenv("HF_KEY", HF_KEY_DEFAULT)
-    if hf_key:
-        try:
-            resp = requests.post(
-                "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-72B-Instruct/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {hf_key}",
-                    "Content-Type":  "application/json",
-                },
-                json={
-                    "model":       "Qwen/Qwen2.5-72B-Instruct",
-                    "messages":    [{"role": "user", "content": prompt}],
-                    "max_tokens":  max_tokens,
-                    "temperature": 0.4,
-                    "stream":      False,
-                },
-                timeout=40,
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            errors.append(f"HF: {e}")
-            log.warning(f"HF error: {e}")
-
-    # ── 3. OpenRouter ────────────────────────────────────────
-    or_key = os.getenv("OPENROUTER_KEY", OPENROUTER_KEY)
-    if or_key:
-        try:
-            resp = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {or_key}",
-                    "Content-Type":  "application/json",
-                    "HTTP-Referer":  "https://goldmasterbot.app",
-                    "X-Title":       "Gold Master Bot",
-                },
-                json={
-                    "model":       "mistralai/mistral-small-3.2-24b-instruct:free",
-                    "messages":    [{"role": "user", "content": prompt}],
-                    "max_tokens":  max_tokens,
-                    "temperature": 0.4,
-                },
-                timeout=30,
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            errors.append(f"OpenRouter: {e}")
-            log.warning(f"OpenRouter error: {e}")
-
-    raise ValueError(f"كل AI engines فشلت: {' | '.join(errors)}")
-
-
-# ════════════════════════════════════════════════════════════════
-#  ASTRO + GANN TIME ANALYSIS
-# ════════════════════════════════════════════════════════════════
-
-# بيانات الأطوار القمرية لأبريل 2026 (ثابتة — يمكن تحديثها شهرياً)
-LUNAR_PHASES_APR2026 = [
-    {
-        "phase": "بدر كامل",
-        "phase_en": "Full Moon",
-        "date_utc": datetime(2026, 4, 2, 2, 11, tzinfo=timezone.utc),
-        "sign": "الميزان",
-        "degree": "12°21",
-        "impact": "هبوطي",
-        "note": "الميزان برج الذهب — البدر مقابل المريخ يُحدث انعكاسات حادة. تزامن مع انهيار 4,800→4,550.",
-        "gold_bias": "BEARISH",
-    },
-    {
-        "phase": "ربع أخير",
-        "phase_en": "Last Quarter",
-        "date_utc": datetime(2026, 4, 10, 4, 51, tzinfo=timezone.utc),
-        "sign": "الجدي",
-        "degree": "20°20",
-        "impact": "هبوطي مستمر",
-        "note": "الجدي برج زحل — التصحيح والانضباط. يتقاطع مع العمود 96 في Gann 144.",
-        "gold_bias": "BEARISH",
-    },
-    {
-        "phase": "هلال جديد",
-        "phase_en": "New Moon",
-        "date_utc": datetime(2026, 4, 17, 11, 51, tzinfo=timezone.utc),
-        "sign": "الحمل",
-        "degree": "27°28",
-        "impact": "انعكاس صاعد محتمل",
-        "note": "الحمل برج المريخ — بداية وطاقة صاعدة. يتقاطع مع نهاية دورة Gann 132-144.",
-        "gold_bias": "BULLISH",
-    },
-    {
-        "phase": "ربع أول",
-        "phase_en": "1st Quarter",
-        "date_utc": datetime(2026, 4, 24, 2, 31, tzinfo=timezone.utc),
-        "sign": "الأسد",
-        "degree": "3°56",
-        "impact": "صاعد قوي",
-        "note": "الأسد برج الشمس — طاقة صاعدة قوية. يُعزز الانعكاس الذي بدأ عند الهلال.",
-        "gold_bias": "BULLISH",
-    },
-]
-
-# نقاط التحول الزمني Gann لدورة 144 ساعة (بدأت 1 أبريل 2026 مع البدر)
-GANN_144_START = datetime(2026, 4, 1, 10, 11, tzinfo=timezone.utc)
-GANN_144_KEY_COLUMNS = {
-    0:   {"label": "بداية الدورة — قمة/انعكاس",   "bias": "REVERSAL"},
-    24:  {"label": "العمود 24 — ربع الدورة",        "bias": "BEARISH"},
-    48:  {"label": "العمود 48 — البدر/انهيار",      "bias": "BEARISH"},
-    72:  {"label": "العمود 72 — منتصف الدورة",      "bias": "BEARISH"},
-    96:  {"label": "العمود 96 — تسارع أو تحول",    "bias": "REVERSAL"},
-    120: {"label": "العمود 120 — اقتراب القاع",     "bias": "BEARISH"},
-    132: {"label": "العمود 132 — منطقة القاع",      "bias": "SUPPORT"},
-    144: {"label": "نهاية الدورة — انعكاس صاعد",   "bias": "BULLISH"},
-}
-
-# ════════════════════════════════════════════════════════════════
-#  GANN SQUARE 144 — حساب ديناميكي مطابق للكود الأصلي (Pine Script)
-# ════════════════════════════════════════════════════════════════
-
-def calc_gann_square_144_levels(upper_price: float, lower_price: float) -> list:
-    """
-    يحسب مستويات Gann Square 144 بنفس منطق الكود الأصلي:
-      price(row) = upperPrice - (upperPrice - lowerPrice) / 144 * row
-    يرجع قائمة من (row, price, label)
-    """
-    levels = []
-    price_range = upper_price - lower_price
-    # كل 6 صفوف = خط شبكة مرئي (buildAxis تطلع كل 6)
-    for row in range(0, 145, 6):
-        price = upper_price - price_range / 144 * row
-        # تحديد التسمية بناءً على أهمية الصف في Gann
-        if row == 0:
-            label = "قمة الدورة (0)"
-        elif row == 144:
-            label = "قاع الدورة (144)"
-        elif row == 36:
-            label = "مقاومة رئيسية (36) — خط أحمر"
-        elif row == 72:
-            label = "منتصف الدورة (72) — محوري"
-        elif row == 108:
-            label = "دعم رئيسي (108) — خط أحمر"
-        elif row == 48:
-            label = "نقطة تحول (48) — خط أحمر"
-        elif row == 96:
-            label = "نقطة تحول (96) — خط أحمر"
-        elif row == 126:
-            label = "دعم (126) — خط أحمر"
-        else:
-            label = f"السطر {row}"
-        levels.append((row, round(price, 3), label))
-    return levels
-
-
-def get_gann_square_144(d: dict) -> dict:
-    """
-    يحسب Gann Square 144 الديناميكي من بيانات OHLCV:
-    - upperPrice = highest(144/2 = 72 شمعة)
-    - lowerPrice = lowest(72 شمعة)
-    مطابق لـ autoPricesAndBar=true في الكود الأصلي
-    """
-    closes = d.get("close", [])
-    highs  = d.get("high",  [])
-    lows   = d.get("low",   [])
-    n = len(closes)
-    if n < 10:
-        return {}
-
-    # نفس منطق Pine Script: highest/lowest آخر 72 شمعة (144/2)
-    lookback    = min(72, n)
-    upper_price = max(highs[-lookback:])
-    lower_price = min(lows[-lookback:])
-    price_range = upper_price - lower_price
-    current     = closes[-1]
-
-    if price_range <= 0:
-        return {}
-
-    # احسب كل مستويات الـ 144
-    levels = calc_gann_square_144_levels(upper_price, lower_price)
-
-    # إيجاد الصف الحالي للسعر
-    current_row = round((upper_price - current) / price_range * 144)
-    current_row = max(0, min(144, current_row))
-
-    # أقرب صف مقاومة وأقرب صف دعم
-    sup_levels = [(r, p, l) for r, p, l in levels if p < current]
-    res_levels = [(r, p, l) for r, p, l in levels if p > current]
-    nearest_sup = max(sup_levels, key=lambda x: x[1]) if sup_levels else None
-    nearest_res = min(res_levels, key=lambda x: x[1]) if res_levels else None
-
-    # أهم المستويات (الصفوف الحرجة: 0,36,48,72,96,108,126,144)
-    key_rows    = {0, 36, 48, 72, 96, 108, 126, 144}
-    key_levels  = [(r, p, l) for r, p, l in levels if r in key_rows]
-
-    return {
-        "upper":        upper_price,
-        "lower":        lower_price,
-        "range":        price_range,
-        "current":      current,
-        "current_row":  current_row,
-        "levels":       levels,
-        "key_levels":   key_levels,
-        "nearest_sup":  nearest_sup,
-        "nearest_res":  nearest_res,
-    }
-
-
-def fmt_gann_square_144_msg(d: dict, price: float) -> str:
-    """رسالة Gann Square 144 الديناميكية الكاملة"""
-    g = get_gann_square_144(d)
-    if not g:
-        return "❌ بيانات غير كافية لحساب Gann Square 144"
-
-    lines = [
-        "⬜ GANN SQUARE OF 144 — ديناميكي",
-        f"💰 السعر: {price:.3f}",
-        f"📈 أعلى سعر (72 شمعة): {g['upper']:.3f}",
-        f"📉 أدنى سعر (72 شمعة): {g['lower']:.3f}",
-        f"📏 النطاق: {g['range']:.3f}",
-        f"📍 الصف الحالي: {g['current_row']} / 144",
-        "",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-        "🔑 المستويات الحرجة:",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-    ]
-    for row, p, lbl in g["key_levels"]:
-        arrow = " ◄ أنت هنا" if abs(p - price) < g["range"] * 0.02 else ""
-        marker = "▲" if p > price else "▼"
-        lines.append(f"  {marker} {lbl}: {p:.3f}{arrow}")
-
-    lines += [
-        "",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-        "🎯 أقرب مستويات:",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-    ]
-    if g["nearest_res"]:
-        r, p, l = g["nearest_res"]
-        lines.append(f"  📈 مقاومة: {p:.3f} (صف {r}) — {l}  +{p-price:.1f}$")
-    lines.append(f"  ▶ السعر: {price:.3f} (صف {g['current_row']})")
-    if g["nearest_sup"]:
-        r, p, l = g["nearest_sup"]
-        lines.append(f"  📉 دعم:    {p:.3f} (صف {r}) — {l}  -{price-p:.1f}$")
-
-    lines += [
-        "",
-        f"🕐 {now_local().strftime('%H:%M:%S')} GMT+2",
-    ]
-    return "\n".join(lines)
-
-
-
-def get_astro_context(price: float, d: dict = None) -> dict:
-    """
-    يحسب السياق الفلكي والزمني الحالي لـ XAUUSD.
-    إذا أُعطيت بيانات OHLCV يحسب Gann Square 144 ديناميكياً.
-    """
-    now_utc = datetime.now(timezone.utc)
-
-    # ── 1. الطور القمري الأقرب ──────────────────────────────────
-    past_phase   = None
-    future_phase = None
-    for ph in LUNAR_PHASES_APR2026:
-        if ph["date_utc"] <= now_utc:
-            past_phase = ph
-        elif future_phase is None:
-            future_phase = ph
-
-    # ── 2. موضع دورة Gann 144 ───────────────────────────────────
-    elapsed_hours = (now_utc - GANN_144_START).total_seconds() / 3600
-    current_col   = int(elapsed_hours) % 144
-
-    prev_key = max((c for c in GANN_144_KEY_COLUMNS if c <= current_col), default=0)
-    next_key = min((c for c in GANN_144_KEY_COLUMNS if c >  current_col), default=144)
-    hours_to_next = next_key - current_col
-
-    # ── 3. Gann Square 144 ديناميكي ─────────────────────────────
-    gann_sq = get_gann_square_144(d) if d else {}
-    nearest_sup = gann_sq.get("nearest_sup")
-    nearest_res = gann_sq.get("nearest_res")
-    current_row = gann_sq.get("current_row", current_col)
-
-    # ── 4. التوقع المدمج ────────────────────────────────────────
-    bias_votes = []
-    if past_phase:
-        bias_votes.append(past_phase["gold_bias"])
-    if future_phase and hours_to_next <= 72:
-        bias_votes.append(future_phase["gold_bias"])
-    gann_bias = GANN_144_KEY_COLUMNS.get(prev_key, {}).get("bias", "NEUTRAL")
-    if gann_bias in ("BEARISH", "BULLISH"):
-        bias_votes.append(gann_bias)
-
-    bear_count = bias_votes.count("BEARISH")
-    bull_count = bias_votes.count("BULLISH")
-    combined_bias = "BEARISH" if bear_count > bull_count else \
-                    "BULLISH" if bull_count > bear_count else "NEUTRAL"
-
-    return {
-        "now_utc":        now_utc,
-        "past_phase":     past_phase,
-        "future_phase":   future_phase,
-        "current_col":    current_col,
-        "elapsed_hours":  elapsed_hours,
-        "prev_key":       prev_key,
-        "next_key":       next_key,
-        "hours_to_next":  hours_to_next,
-        "current_row":    current_row,
-        "nearest_sup":    nearest_sup,
-        "nearest_res":    nearest_res,
-        "gann_sq":        gann_sq,
-        "combined_bias":  combined_bias,
-        "bias_votes":     bias_votes,
-    }
-
-
-def fmt_astro_msg(price: float, d: dict = None) -> str:
-    """رسالة التحليل الفلكي والزمني للمستخدم — مع Gann Square 144 ديناميكي"""
-    ctx = get_astro_context(price, d)
-    g   = ctx.get("gann_sq", {})
-    lines = [
-        "🌙 التحليل الفلكي والزمني — XAUUSD",
-        f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2",
-        f"💰 السعر: {price:.3f}",
-        "",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-        "📅 الدورة القمرية",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-    ]
-
-    if ctx["past_phase"]:
-        ph = ctx["past_phase"]
-        diff_h = (ctx["now_utc"] - ph["date_utc"]).total_seconds() / 3600
-        bias_icon = "🔴" if ph["gold_bias"] == "BEARISH" else "🟢" if ph["gold_bias"] == "BULLISH" else "🟡"
-        lines += [
-            f"✅ آخر طور: {ph['phase']} في {ph['sign']} {ph['degree']}°",
-            f"   منذ {diff_h:.0f} ساعة — تأثير: {bias_icon} {ph['impact']}",
-            f"   {ph['note']}",
-        ]
-
-    if ctx["future_phase"]:
-        ph = ctx["future_phase"]
-        diff_h = (ph["date_utc"] - ctx["now_utc"]).total_seconds() / 3600
-        diff_d = diff_h / 24
-        bias_icon = "🔴" if ph["gold_bias"] == "BEARISH" else "🟢" if ph["gold_bias"] == "BULLISH" else "🟡"
-        lines += [
-            "",
-            f"⏳ الطور القادم: {ph['phase']} في {ph['sign']} {ph['degree']}°",
-            f"   بعد {diff_d:.1f} يوم ({diff_h:.0f} ساعة) — {bias_icon} {ph['impact']}",
-            f"   {ph['note']}",
-        ]
-
-    lines += [
-        "",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-        "⬜ دورة Gann 144 ساعة",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-        f"📍 العمود الحالي: {ctx['current_col']} / 144",
-        f"📊 مرحلة: {GANN_144_KEY_COLUMNS.get(ctx['prev_key'], {}).get('label', '—')}",
-        f"⏭ النقطة التالية: العمود {ctx['next_key']} (بعد {ctx['hours_to_next']:.0f} ساعة)",
-        f"   {GANN_144_KEY_COLUMNS.get(ctx['next_key'], {}).get('label', '—')}",
-    ]
-
-    lines += [
-        "",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-        "🎯 Gann Square 144 — ديناميكي",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-    ]
-    if g:
-        lines.append(f"📈 أعلى: {g['upper']:.3f}  |  📉 أدنى: {g['lower']:.3f}")
-        lines.append(f"📍 الصف الحالي للسعر: {g.get('current_row', '—')} / 144")
-        lines.append("")
-        # عرض المستويات الحرجة
-        for row, p, lbl in g.get("key_levels", []):
-            arrow = " ◄◄" if abs(p - price) < g["range"] * 0.015 else ""
-            marker = "▲" if p > price else "▼"
-            diff = abs(p - price)
-            lines.append(f"  {marker} {p:.3f} [{row:3d}] {lbl}{arrow}  ({diff:.1f}$)")
-        lines.append("")
-        if ctx["nearest_res"]:
-            r, p, lbl = ctx["nearest_res"]
-            lines.append(f"📈 أقرب مقاومة: {p:.3f} (صف {r})  +{p-price:.1f}$")
-        lines.append(f"   ▶ السعر: {price:.3f} (صف {g.get('current_row','—')}) ◀")
-        if ctx["nearest_sup"]:
-            r, p, lbl = ctx["nearest_sup"]
-            lines.append(f"📉 أقرب دعم:    {p:.3f} (صف {r})  -{price-p:.1f}$")
-    else:
-        if ctx["nearest_res"]:
-            r, p, lbl = ctx["nearest_res"]
-            lines.append(f"📈 مقاومة: {p:.3f} (صف {r}) — {lbl}")
-        lines.append(f"   ▶ السعر الحالي: {price:.3f} ◀")
-        if ctx["nearest_sup"]:
-            r, p, lbl = ctx["nearest_sup"]
-            lines.append(f"📉 دعم:    {p:.3f} (صف {r}) — {lbl}")
-
-    bias = ctx["combined_bias"]
-    bias_ar = "هبوطي 🔴" if bias == "BEARISH" else "صاعد 🟢" if bias == "BULLISH" else "محايد 🟡"
-    lines += [
-        "",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-        f"🧭 التوقع المدمج: {bias_ar}",
-        "━━━━━━━━━━━━━━━━━━━━━━━━",
-    ]
-
-    return "\n".join(lines)
-
-
-# ════════════════════════════════════════════════════════════════
-#  AI ANALYSIS — مدمج مع Gann + فلكي (OpenRouter)
-# ════════════════════════════════════════════════════════════════
-
-async def claude_analysis(sig: dict) -> str:
-    """تحليل AI شامل: مؤشرات تقنية + Gann + فلكي"""
-    hf_key     = os.getenv("HF_KEY", HF_KEY_DEFAULT)
-    or_key     = os.getenv("OPENROUTER_KEY", OPENROUTER_KEY)
-    cohere_key = os.getenv("COHERE_KEY", COHERE_KEY_DEFAULT)
-    if not hf_key and not or_key and not cohere_key:
-        return (
-            "⚠️ AI غير مفعّل.\n\n"
-            "أضف في Railway → Variables:\n"
-            "  Key:   COHERE_KEY\n"
-            "  Value: مفتاحك من dashboard.cohere.com\n\n"
-            "خطوات (دقيقتين):\n"
-            "1. افتح dashboard.cohere.com\n"
-            "2. سجّل بحساب Google\n"
-            "3. API Keys → انسخ Trial Key\n"
-            "4. ضعه في Railway"
-        )
+async def claude_analysis(sig: dict, extra_data: dict = None) -> str:
+    if not HAS_GROQ or not GROQ_KEY:
+        return "⚠️ Groq API غير مفعّل. أضف GROQ_KEY في Render.\naحصل على Key المجاني من: console.groq.com"
     try:
-        price = sig.get("price", 0)
-        # جلب بيانات H1 للحساب الديناميكي
-        _d_for_gann = fetch_ohlcv_cached("1h", 200) or {}
-        ctx   = get_astro_context(price, _d_for_gann)
+        client = Groq(api_key=GROQ_KEY)
 
-        # ── بناء سياق فلكي نصي ──────────────────────────────────
-        astro_lines = []
-        if ctx["past_phase"]:
-            ph = ctx["past_phase"]
-            diff_h = (ctx["now_utc"] - ph["date_utc"]).total_seconds() / 3600
-            astro_lines.append(
-                f"- آخر طور قمري: {ph['phase']} في {ph['sign']} {ph['degree']}° "
-                f"(منذ {diff_h:.0f} ساعة) — تأثير: {ph['impact']}"
-            )
-        if ctx["future_phase"]:
-            ph = ctx["future_phase"]
-            diff_h = (ph["date_utc"] - ctx["now_utc"]).total_seconds() / 3600
-            astro_lines.append(
-                f"- الطور القمري القادم: {ph['phase']} في {ph['sign']} {ph['degree']}° "
-                f"(بعد {diff_h:.0f} ساعة) — {ph['impact']}"
-            )
+        # بيانات إضافية لو موجودة
+        extra_text = ""
+        if extra_data:
+            if extra_data.get('patterns'):
+                pats = extra_data['patterns']
+                bull_pats = [p['name'] for p in pats if p.get('signal')=='BULLISH']
+                bear_pats = [p['name'] for p in pats if p.get('signal')=='BEARISH']
+                if bull_pats: extra_text += f"\nنماذج صاعدة: {', '.join(bull_pats)}"
+                if bear_pats: extra_text += f"\nنماذج هابطة: {', '.join(bear_pats)}"
+            if extra_data.get('gann'):
+                g = extra_data['gann']
+                if g.get('resistance'): extra_text += f"\nGann مقاومة: {g['resistance'][0]['level']:.2f}"
+                if g.get('support'):    extra_text += f"\nGann دعم: {g['support'][0]['level']:.2f}"
+            if extra_data.get('session'):
+                sess = extra_data['session']
+                if not sess.get('weekend'):
+                    extra_text += f"\nالسيشن: {sess.get('name','')}"
 
-        astro_lines.append(
-            f"- دورة Gann 144: العمود الحالي {ctx['current_col']}/144 — "
-            f"{GANN_144_KEY_COLUMNS.get(ctx['prev_key'], {}).get('label', '')}"
+        prompt = f"""أنت محلل ذهب خبير. حلل البيانات التالية وقدم رأيك بالعربية في 5 أسطر فقط:
+
+السعر: ${sig['price']:.2f}
+الاتجاه العام: {sig['direction']}
+RSI({sig['RSI']:.0f}): {'تشبع شرائي ⚠️' if sig['RSI']>70 else 'تشبع بيعي ⚠️' if sig['RSI']<30 else 'طبيعي'}
+MACD: {'صاعد ✅' if sig['MACD']['bull'] else 'هابط ❌'}
+Supertrend: {'صاعد ✅' if sig['st_bull'] else 'هابط ❌'}
+EMA Stack: {'صاعدة' if sig['ema_bull'] else 'هابطة' if sig['ema_bear'] else 'محايدة'}
+BUY/SELL: {sig['buyScore']}/12 — {sig['sellScore']}/12
+ATR: {sig['ATR']:.2f}{extra_text}
+
+قدم بالعربية:
+1. ملخص الوضع (جملتان)
+2. أهم مستوى دعم ومقاومة
+3. توصية واضحة (شراء/بيع/انتظار) مع السبب الرئيسي
+4. مستوى الخطر (منخفض/متوسط/عالي)"""
+
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=450,
+            temperature=0.3,
         )
-        astro_lines.append(
-            f"- النقطة الزمنية القادمة: العمود {ctx['next_key']} بعد {ctx['hours_to_next']:.0f} ساعة"
-        )
-        if ctx["nearest_res"]:
-            l, c, d = ctx["nearest_res"]
-            astro_lines.append(f"- أقرب مقاومة Gann Square: {l:.2f} (العمود {c}) — {d}")
-        if ctx["nearest_sup"]:
-            l, c, d = ctx["nearest_sup"]
-            astro_lines.append(f"- أقرب دعم Gann Square:     {l:.2f} (العمود {c}) — {d}")
-        astro_lines.append(
-            f"- التوقع الفلكي المدمج: {ctx['combined_bias']}"
-        )
-
-        astro_context = "\n".join(astro_lines)
-
-        # ── المؤشرات التقنية ────────────────────────────────────
-        prompt = f"""أنت محلل ذهب محترف متخصص في تحليل Gann الزمني والفلكي. \
-حلل الوضع الحالي لـ XAUUSD وقدم تحليلاً مدمجاً شاملاً بالعربية.
-
-═══ المؤشرات التقنية ═══
-السعر الحالي: ${price:.3f}
-الاتجاه: {sig.get('direction', 'NEUTRAL')}
-RSI (14): {sig.get('RSI', 50):.1f}
-MACD: {'صاعد ↑' if sig.get('MACD', {}).get('bull') else 'هابط ↓'}
-Supertrend: {'صاعد ✅' if sig.get('st_bull') else 'هابط ❌'}
-EMA Stack: {'صاعدة' if sig.get('ema_bull') else 'هابطة' if sig.get('ema_bear') else 'محايدة'}
-BUY Score:  {sig.get('buyScore', 0)}/12
-SELL Score: {sig.get('sellScore', 0)}/12
-ATR: {sig.get('ATR', 0):.2f}
-
-═══ التحليل الفلكي وGann الزمني ═══
-{astro_context}
-
-═══ المطلوب ═══
-قدم تحليلاً متكاملاً يشمل:
-1. خلاصة الوضع التقني والفلكي (3-4 جمل)
-2. أهم 3 مستويات للمراقبة (مع الأسباب من Gann وFib)
-3. السيناريو الأرجح مع نسبة الاحتمال (هبوطي/صاعد/تذبذب)
-4. توصية التداول المحددة:
-   - الاتجاه (شراء/بيع/انتظار)
-   - نقطة الدخول
-   - وقف الخسارة
-   - الهدف 1 والهدف 2
-5. التقاطعات الزمنية الحرجة القادمة (Gann + قمري)
-
-اكتب بالعربية بشكل واضح ومنظم. استخدم الأرقام الدقيقة من البيانات أعلاه."""
-
-        result = _ai_call(prompt, max_tokens=700)
-
-        bias   = ctx["combined_bias"]
-        b_icon = "🔴" if bias == "BEARISH" else "🟢" if bias == "BULLISH" else "🟡"
-        header = (
-            f"🤖 تحليل AI المدمج\n"
-            f"💰 السعر: {price:.3f}  {b_icon} {bias}\n"
-            f"🌙 الطور: {ctx['past_phase']['phase'] if ctx['past_phase'] else '—'}\n"
-            f"⬜ Gann: العمود {ctx['current_col']}/144\n"
-            f"{'─'*28}\n\n"
-        )
-        return header + result
-
+        result = response.choices[0].message.content
+        return f"🤖 تحليل Groq AI:\n\n{result}"
     except Exception as e:
-        log.error(f"claude_analysis error: {e}")
-        return f"⚠️ خطأ في AI:\n{str(e)[:200]}"
+        return f"⚠️ Groq error: {str(e)[:100]}"
 
 # ════════════════════════════════════════════════════════════════
 #  CHART GENERATOR — شارت احترافي بالصورة
@@ -2968,157 +2895,6 @@ def detect_trendlines(highs: list, lows: list, n: int):
                     })
 
     return trendlines
-
-
-def generate_chart(d: dict, sig: dict, tf_label: str = "1H") -> Optional[bytes]:
-    """شارت شموع احترافي مع EMA + RSI + إشارة BUY/SELL"""
-    try:
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-        import matplotlib.patches as mpatches
-        import io
-
-        closes = d['close']
-        opens  = d['open']
-        highs  = d['high']
-        lows   = d['low']
-        n      = len(closes)
-        if n < 10:
-            return None
-
-        # عدد الشموع المعروضة
-        show = min(60, n)
-        idx  = list(range(show))
-        c    = closes[-show:]
-        o    = opens[-show:]
-        h    = highs[-show:]
-        l    = lows[-show:]
-
-        # EMA
-        ema20 = calc_ema(closes, 20)[-show:]
-        ema50 = calc_ema(closes, 50)[-show:]
-
-        # RSI
-        rsi_all = calc_rsi(closes, 14)
-        rsi     = rsi_all[-show:]
-
-        # ── Figure ─────────────────────────────────────────────
-        fig, (ax1, ax2) = plt.subplots(
-            2, 1, figsize=(14, 8),
-            gridspec_kw={'height_ratios': [3, 1]},
-            facecolor='#131722'
-        )
-        ax1.set_facecolor('#131722')
-        ax2.set_facecolor('#131722')
-
-        # ── شموع ────────────────────────────────────────────────
-        for i in range(show):
-            bull   = c[i] >= o[i]
-            color  = '#26a69a' if bull else '#ef5350'
-            # wick
-            ax1.plot([i, i], [l[i], h[i]], color=color, linewidth=0.8, zorder=2)
-            # body
-            body_h = max(abs(c[i] - o[i]), 0.1)
-            rect   = mpatches.FancyBboxPatch(
-                (i - 0.35, min(c[i], o[i])), 0.7, body_h,
-                boxstyle='square,pad=0',
-                facecolor=color, edgecolor=color, linewidth=0, zorder=3
-            )
-            ax1.add_patch(rect)
-
-        # ── EMA ─────────────────────────────────────────────────
-        ax1.plot(idx, ema20, color='#f48fb1', linewidth=1.2,
-                 label='EMA20', zorder=4)
-        ax1.plot(idx, ema50, color='#81d4fa', linewidth=1.2,
-                 label='EMA50', zorder=4)
-
-        # ── إشارة BUY/SELL ──────────────────────────────────────
-        price   = sig.get('price', c[-1])
-        dire    = sig.get('direction', 'NEUTRAL')
-        bs      = sig.get('buyScore',  0)
-        ss      = sig.get('sellScore', 0)
-        atr     = sig.get('ATR', (max(h) - min(l)) / show)
-        if dire == 'BULLISH':
-            ax1.annotate('▲ BUY',
-                         xy=(show - 1, price), xytext=(-6, -20),
-                         textcoords='offset points',
-                         color='#26a69a', fontsize=11, fontweight='bold')
-            ax1.axhline(price - atr,     color='#ef5350', linewidth=0.8,
-                        linestyle='--', alpha=0.7, label=f'SL {price-atr:.1f}')
-            ax1.axhline(price + atr*1.5, color='#26a69a', linewidth=0.8,
-                        linestyle='--', alpha=0.7, label=f'TP1 {price+atr*1.5:.1f}')
-            ax1.axhline(price + atr*3,   color='#00e676', linewidth=0.8,
-                        linestyle=':', alpha=0.7, label=f'TP2 {price+atr*3:.1f}')
-        elif dire == 'BEARISH':
-            ax1.annotate('▼ SELL',
-                         xy=(show - 1, price), xytext=(-6, 8),
-                         textcoords='offset points',
-                         color='#ef5350', fontsize=11, fontweight='bold')
-            ax1.axhline(price + atr,     color='#ef5350', linewidth=0.8,
-                        linestyle='--', alpha=0.7, label=f'SL {price+atr:.1f}')
-            ax1.axhline(price - atr*1.5, color='#26a69a', linewidth=0.8,
-                        linestyle='--', alpha=0.7, label=f'TP1 {price-atr*1.5:.1f}')
-            ax1.axhline(price - atr*3,   color='#00e676', linewidth=0.8,
-                        linestyle=':', alpha=0.7, label=f'TP2 {price-atr*3:.1f}')
-
-        # ── محاور وعنوان ─────────────────────────────────────────
-        price_rng = max(h) - min(l)
-        margin    = price_rng * 0.08
-        ax1.set_xlim(-1, show)
-        ax1.set_ylim(min(l) - margin, max(h) + margin)
-
-        dir_icon  = '🟢' if dire == 'BULLISH' else '🔴' if dire == 'BEARISH' else '🟡'
-        ax1.set_title(
-            f'XAU/USD  [{tf_label}]   {price:,.2f}   {dir_icon} {dire}   '
-            f'BUY {bs}/12  SELL {ss}/12',
-            color='#d4af37', fontsize=11, fontweight='bold', pad=8
-        )
-        ax1.yaxis.set_tick_params(labelcolor='#9e9e9e', labelsize=8)
-        ax1.set_xticks([])
-        ax1.grid(axis='y', color='#1e2130', linewidth=0.5)
-        ax1.legend(loc='upper left', fontsize=7, facecolor='#1e2130',
-                   edgecolor='#333', labelcolor='#ccc', framealpha=0.7)
-        ax1.text(0.01, 0.01, f'Price: {price:,.3f}',
-                 transform=ax1.transAxes, color='#d4af37',
-                 fontsize=9, va='bottom')
-
-        # ── RSI ──────────────────────────────────────────────────
-        ax2.plot(idx, rsi, color='#ce93d8', linewidth=1.2, label='RSI(14)')
-        ax2.axhline(70, color='#ef5350', linewidth=0.7, linestyle='--', alpha=0.6)
-        ax2.axhline(30, color='#26a69a', linewidth=0.7, linestyle='--', alpha=0.6)
-        ax2.axhline(50, color='#555',    linewidth=0.5, linestyle=':',  alpha=0.4)
-        ax2.fill_between(idx, rsi, 70, where=[r > 70 for r in rsi],
-                         color='#ef5350', alpha=0.15)
-        ax2.fill_between(idx, rsi, 30, where=[r < 30 for r in rsi],
-                         color='#26a69a', alpha=0.15)
-        ax2.set_xlim(-1, show)
-        ax2.set_ylim(0, 100)
-        ax2.set_yticks([30, 50, 70])
-        ax2.yaxis.set_tick_params(labelcolor='#9e9e9e', labelsize=8)
-        ax2.set_xticks([])
-        ax2.grid(axis='y', color='#1e2130', linewidth=0.5)
-        ax2.set_ylabel('RSI', color='#9e9e9e', fontsize=8)
-        cur_rsi = rsi[-1]
-        rsi_col = '#ef5350' if cur_rsi > 70 else '#26a69a' if cur_rsi < 30 else '#ce93d8'
-        ax2.text(show - 1, cur_rsi, f' {cur_rsi:.0f}',
-                 color=rsi_col, fontsize=8, va='center')
-
-        # ── وقت ──────────────────────────────────────────────────
-        fig.text(0.99, 0.01, now_local().strftime('%Y-%m-%d %H:%M GMT+2'),
-                 ha='right', color='#555', fontsize=7)
-
-        plt.tight_layout(pad=0.5)
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=120,
-                    bbox_inches='tight', facecolor='#131722')
-        plt.close(fig)
-        buf.seek(0)
-        return buf.read()
-
-    except Exception as e:
-        log.error(f"generate_chart error: {e}")
-        return None
 
 
 def generate_weekly_chart(report: dict) -> Optional[bytes]:
@@ -3372,11 +3148,12 @@ def main_keyboard():
         ],
         [
             InlineKeyboardButton("🤖 AI تحليل",    callback_data="ai"),
-            InlineKeyboardButton("🌙 فلكي+Gann",   callback_data="astro"),
             InlineKeyboardButton("📊 شارت",         callback_data="chart"),
+            InlineKeyboardButton("❓ مساعدة",       callback_data="help"),
         ],
         [
-            InlineKeyboardButton("❓ مساعدة",       callback_data="help"),
+            InlineKeyboardButton("📰 أخبار الذهب",  callback_data="calendar"),
+            InlineKeyboardButton("🔗 Correlation",   callback_data="correlation"),
         ],
         [
             InlineKeyboardButton("🏆 إحصائياتي",   callback_data="stats"),
@@ -3694,6 +3471,83 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
+    elif data == "correlation":
+        await query.message.reply_text("⏳ جاري تحليل العلاقة الثلاثية...",
+                                       reply_markup=main_keyboard())
+        try:
+            loop = asyncio.get_event_loop()
+            result = await asyncio.wait_for(
+                loop.run_in_executor(None, get_triple_analysis),
+                timeout=25.0
+            )
+            if not result:
+                text = "❌ فشل جلب البيانات."
+                await query.message.reply_text(text, reply_markup=main_keyboard())
+            else:
+                # ابعت الشارت أولاً
+                img = await loop.run_in_executor(None, generate_triple_chart, result)
+                if img:
+                    await query.message.reply_photo(
+                        photo=img,
+                        caption="📊 العلاقة الثلاثية: ذهب / دولار / جنيه (آخر 30 يوم)",
+                        reply_markup=main_keyboard()
+                    )
+                # ثم التقرير النصي
+                text = fmt_triple_msg(result)
+                await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                               reply_markup=main_keyboard())
+        except asyncio.TimeoutError:
+            await query.message.reply_text("⏱ انتهت المهلة — جرب تاني.",
+                                           reply_markup=main_keyboard())
+        except Exception as e:
+            await query.message.reply_text(f"❌ خطأ: {str(e)[:100]}",
+                                           reply_markup=main_keyboard())
+
+
+    elif data == "calendar":
+        await query.message.reply_text("⏳ جاري جلب الأحداث الاقتصادية...",
+                                       reply_markup=main_keyboard())
+        try:
+            loop   = asyncio.get_event_loop()
+            events = await asyncio.wait_for(
+                loop.run_in_executor(None, get_economic_calendar),
+                timeout=10.0
+            )
+            lines = [
+                f"📰 الأحداث الاقتصادية المؤثرة على الذهب",
+                f"",
+            ]
+            for e in events:
+                if 'impact' in e:
+                    # Fallback events
+                    lines += [
+                        f"{e['impact']} {e['title']}",
+                        f"   📅 {e['day']}",
+                        f"   {e['desc']}",
+                        f"",
+                    ]
+                else:
+                    # API events
+                    imp = '🔴' if e.get('importance',1) >= 3 else '🟠' if e.get('importance',1) >= 2 else '🟡'
+                    lines += [
+                        f"{imp} {e['title']} ({e.get('country','')})",
+                        f"   📅 {e.get('date','')[:10]}",
+                        f"",
+                    ]
+            lines += [
+                f"💡 الأحداث الأهم للذهب:",
+                f"  🔴 FOMC — قرار الفائدة",
+                f"  🔴 CPI — بيانات التضخم",
+                f"  🔴 NFP — الوظائف الأمريكية",
+                f"",
+                f"🕐 {now_local().strftime('%Y-%m-%d %H:%M')} GMT+2",
+            ]
+            text = '\n'.join(lines)
+        except Exception as e:
+            text = f"❌ خطأ: {str(e)[:100]}"
+        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                       reply_markup=main_keyboard())
+
     elif data == "patterns":
         await query.message.reply_text("⏳ جاري تحليل النماذج على كل الفريمات...",
                                        reply_markup=main_keyboard())
@@ -3759,16 +3613,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        reply_markup=main_keyboard())
 
     elif data == "gann_square":
-        await query.message.reply_text("⏳ جاري حساب Gann Square 144...",
+        await query.message.reply_text("⏳ جاري حساب Gann Square...",
                                        reply_markup=main_keyboard())
         price = get_price_cached()
-        d     = fetch_ohlcv_cached("1h", 200)
         if not price:
             text = "❌ فشل جلب السعر."
-        elif not d:
-            text = "❌ فشل جلب البيانات."
         else:
-            text = fmt_gann_square_144_msg(d, price)
+            g = calc_gann_square(price)
+            lines = [
+                f"⬜ GANN SQUARE OF NINE",
+                f"السعر: {price:.2f}  |  الجذر: {g['root']}",
+                "",
+                "📈 مقاومة:",
+            ]
+            for r in g['resistance']:
+                diff = r['level'] - price
+                lines.append(f"  ▲ {r['level']:.2f}  ({r['angle']})  +{diff:.2f}$")
+            lines.append("")
+            lines.append("📉 دعم:")
+            for s in g['support']:
+                diff = price - s['level']
+                lines.append(f"  ▼ {s['level']:.2f}  ({s['angle']})  -{diff:.2f}$")
+            text = '\n'.join(lines)
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
@@ -3889,47 +3755,40 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
 
-    elif data == "astro":
-        await query.message.reply_text("⏳ جاري حساب التحليل الفلكي والزمني...",
-                                       reply_markup=main_keyboard())
-        price = get_price_cached()
-        if not price:
-            text = "❌ فشل جلب السعر."
-        else:
-            _d = fetch_ohlcv_cached("1h", 200) or {}
-            text = fmt_astro_msg(price, _d)
-        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
-                                       reply_markup=main_keyboard())
-
     elif data == "ai":
-        _hf  = os.getenv("HF_KEY", HF_KEY_DEFAULT)
-        _or  = os.getenv("OPENROUTER_KEY", OPENROUTER_KEY)
-        if not _hf and not _or:
-            text = (
-                "🤖 Gold Master AI\n\n"
-                "❌ غير مفعّل حالياً\n\n"
-                "أضف في Railway → Variables:\n"
-                "  Key:   HF_KEY\n"
-                "  Value: مفتاحك من huggingface.co\n\n"
-                "خطوات:\n"
-                "1. huggingface.co → Settings\n"
-                "2. Access Tokens → New Token\n"
-                "3. Read → انسخ وضع في Railway"
-            )
+        if not HAS_GROQ or not GROQ_KEY:
+            text = ("🤖 Groq AI\n\n❌ غير مفعّل\n\n"
+                    "لتفعيله أضف في Render:\n"
+                    "Key: GROQ_KEY\n"
+                    "Value: مفتاح من console.groq.com")
+            await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                           reply_markup=main_keyboard())
         else:
             try:
                 await query.message.reply_text("⏳ جاري التحليل بالذكاء الاصطناعي...",
                                                reply_markup=main_keyboard())
-                d    = fetch_ohlcv_cached("1h", 200)
+                d = fetch_ohlcv_cached("1h", 200)
                 if not d:
                     text = "❌ فشل جلب البيانات."
                 else:
-                    sig  = full_analysis(d)
-                    text = await claude_analysis(sig)
+                    sig     = full_analysis(d)
+                    price   = sig['price']
+                    # جمع بيانات إضافية
+                    gann    = calc_gann_square(price)
+                    session = get_current_session()
+                    # نماذج الشموع
+                    c_pats  = detect_candlestick_patterns(
+                        d['open'], d['high'], d['low'], d['close'])
+                    extra   = {
+                        'gann':    gann,
+                        'session': session,
+                        'patterns': c_pats,
+                    }
+                    text = await claude_analysis(sig, extra)
             except Exception as e:
-                text = f"❌ خطأ في Gemini AI: {str(e)}"
-        await query.message.reply_text(text, parse_mode=ParseMode.HTML,
-                                       reply_markup=main_keyboard())
+                text = f"❌ خطأ في AI: {str(e)[:100]}"
+            await query.message.reply_text(text, parse_mode=ParseMode.HTML,
+                                           reply_markup=main_keyboard())
 
     elif data == "chart":
         # أزرار اختيار الـ timeframe
@@ -4133,18 +3992,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                        reply_markup=main_keyboard())
-
-async def cmd_astro(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/astro — التحليل الفلكي والزمني مع Gann Square 144 ديناميكي"""
-    await update.message.reply_text("⏳ جاري حساب التحليل الفلكي والزمني...")
-    price = get_price_cached()
-    if not price:
-        await update.message.reply_text("❌ فشل جلب السعر.", reply_markup=main_keyboard())
-        return
-    d    = fetch_ohlcv_cached("1h", 200) or {}
-    text = fmt_astro_msg(price, d)
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
-
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name or "صديقي"
@@ -4676,9 +4523,7 @@ def main():
         return
 
     print("🥇 GOLD MASTER BOT Starting...")
-    _hf_ok = bool(os.getenv("HF_KEY", HF_KEY_DEFAULT))
-    _or_ok = bool(os.getenv("OPENROUTER_KEY", OPENROUTER_KEY))
-    print(f"   AI Engine: {'✅ HF' if _hf_ok else ''}{'✅ OR' if _or_ok else ''}{'❌ أضف HF_KEY من huggingface.co' if not _hf_ok and not _or_ok else ''}")
+    print(f"   Groq AI: {'✅' if HAS_GROQ and GROQ_KEY else '❌ (أضف GROQ_KEY)'}")
     print(f"   ta library: {'✅' if HAS_TA else '⚠️ (built-in indicators)'}")
 
     app = (ApplicationBuilder()
@@ -4702,7 +4547,6 @@ def main():
     app.add_handler(CommandHandler("setalert",  cmd_set_alert))
     app.add_handler(CommandHandler("alerts",    cmd_alerts_list))
     app.add_handler(CommandHandler("ai",        cmd_ai))
-    app.add_handler(CommandHandler("astro",     cmd_astro))
     app.add_handler(CommandHandler("chart",     cmd_chart))
     app.add_handler(CommandHandler("stats",     cmd_stats))
     app.add_handler(CommandHandler("session",      cmd_session))
