@@ -171,7 +171,24 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1Ow
 TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e")
 
 # Groq API Key (مجاني — من console.groq.com)
-GROQ_KEY        = os.getenv("GROQ_KEY",        "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")
+GROQ_KEY        = os.getenv("GROQ_KEY", "")
+
+# OpenRouter API Key (بديل Groq — openrouter.ai)
+OPENROUTER_KEY  = os.getenv("OPENROUTER_KEY", "")
+
+# Cohere API Key (بديل تاني — cohere.com)
+COHERE_KEY      = os.getenv("COHERE_KEY", "0xoiLo7FMswnN5KZd5nK98Q4wiRZBBdNbZXMnyei")
+
+# اختار الـ AI Provider المتاح
+def get_ai_provider():
+    """اختار أحسن AI provider متاح"""
+    if OPENROUTER_KEY and len(OPENROUTER_KEY) > 10:
+        return 'openrouter'
+    if GROQ_KEY and len(GROQ_KEY) > 10 and HAS_GROQ:
+        return 'groq'
+    if COHERE_KEY and len(COHERE_KEY) > 10:
+        return 'cohere'
+    return None
 
 # MongoDB URI (لحفظ الإشارات والإحصائيات)
 MONGODB_URI     = os.getenv("MONGODB_URI",     "mongodb+srv://alaaeldinlool_db_user:97sJMDccaJjmszje@cluster0.oufdfub.mongodb.net/?appName=Cluster0")
@@ -2895,60 +2912,123 @@ async def cmd_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ════════════════════════════════════════════════════════════════
-#  GROQ AI ANALYSIS (مجاني)
+#  AI ANALYSIS — OpenRouter / Groq / Cohere
 # ════════════════════════════════════════════════════════════════
 
-async def claude_analysis(sig: dict, extra_data: dict = None) -> str:
-    if not HAS_GROQ or not GROQ_KEY:
-        return "⚠️ Groq API غير مفعّل. أضف GROQ_KEY في Render.\naحصل على Key المجاني من: console.groq.com"
-    try:
-        client = Groq(api_key=GROQ_KEY)
+def build_ai_prompt(sig: dict, extra_data: dict = None) -> str:
+    """بناء الـ prompt للتحليل"""
+    extra_text = ""
+    if extra_data:
+        if extra_data.get('patterns'):
+            pats = extra_data['patterns']
+            bull_pats = [p['name'] for p in pats if p.get('signal')=='BULLISH']
+            bear_pats = [p['name'] for p in pats if p.get('signal')=='BEARISH']
+            if bull_pats: extra_text += f"\nنماذج صاعدة: {', '.join(bull_pats)}"
+            if bear_pats: extra_text += f"\nنماذج هابطة: {', '.join(bear_pats)}"
+        if extra_data.get('gann'):
+            g = extra_data['gann']
+            if g.get('resistance'): extra_text += f"\nGann مقاومة: {g['resistance'][0]['level']:.2f}"
+            if g.get('support'):    extra_text += f"\nGann دعم: {g['support'][0]['level']:.2f}"
+        if extra_data.get('session'):
+            sess = extra_data['session']
+            if not sess.get('weekend'):
+                extra_text += f"\nالسيشن: {sess.get('name','')}"
 
-        # بيانات إضافية لو موجودة
-        extra_text = ""
-        if extra_data:
-            if extra_data.get('patterns'):
-                pats = extra_data['patterns']
-                bull_pats = [p['name'] for p in pats if p.get('signal')=='BULLISH']
-                bear_pats = [p['name'] for p in pats if p.get('signal')=='BEARISH']
-                if bull_pats: extra_text += f"\nنماذج صاعدة: {', '.join(bull_pats)}"
-                if bear_pats: extra_text += f"\nنماذج هابطة: {', '.join(bear_pats)}"
-            if extra_data.get('gann'):
-                g = extra_data['gann']
-                if g.get('resistance'): extra_text += f"\nGann مقاومة: {g['resistance'][0]['level']:.2f}"
-                if g.get('support'):    extra_text += f"\nGann دعم: {g['support'][0]['level']:.2f}"
-            if extra_data.get('session'):
-                sess = extra_data['session']
-                if not sess.get('weekend'):
-                    extra_text += f"\nالسيشن: {sess.get('name','')}"
-
-        prompt = f"""أنت محلل ذهب خبير. حلل البيانات التالية وقدم رأيك بالعربية في 5 أسطر فقط:
+    return f"""أنت محلل ذهب خبير. حلل البيانات التالية وقدم رأيك بالعربية في 5 أسطر فقط:
 
 السعر: ${sig['price']:.2f}
-الاتجاه العام: {sig['direction']}
-RSI({sig['RSI']:.0f}): {'تشبع شرائي ⚠️' if sig['RSI']>70 else 'تشبع بيعي ⚠️' if sig['RSI']<30 else 'طبيعي'}
-MACD: {'صاعد ✅' if sig['MACD']['bull'] else 'هابط ❌'}
-Supertrend: {'صاعد ✅' if sig['st_bull'] else 'هابط ❌'}
-EMA Stack: {'صاعدة' if sig['ema_bull'] else 'هابطة' if sig['ema_bear'] else 'محايدة'}
-BUY/SELL: {sig['buyScore']}/12 — {sig['sellScore']}/12
+الاتجاه: {sig['direction']}
+RSI: {sig['RSI']:.0f} {'(تشبع شرائي)' if sig['RSI']>70 else '(تشبع بيعي)' if sig['RSI']<30 else '(طبيعي)'}
+MACD: {'صاعد' if sig['MACD']['bull'] else 'هابط'}
+Supertrend: {'صاعد' if sig['st_bull'] else 'هابط'}
+BUY/SELL Score: {sig['buyScore']}/12 — {sig['sellScore']}/12
 ATR: {sig['ATR']:.2f}{extra_text}
 
 قدم بالعربية:
 1. ملخص الوضع (جملتان)
 2. أهم مستوى دعم ومقاومة
-3. توصية واضحة (شراء/بيع/انتظار) مع السبب الرئيسي
+3. توصية واضحة (شراء/بيع/انتظار) مع السبب
 4. مستوى الخطر (منخفض/متوسط/عالي)"""
 
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=450,
-            temperature=0.3,
-        )
-        result = response.choices[0].message.content
-        return f"🤖 تحليل Groq AI:\n\n{result}"
-    except Exception as e:
-        return f"⚠️ Groq error: {str(e)[:100]}"
+
+async def claude_analysis(sig: dict, extra_data: dict = None) -> str:
+    """تحليل AI — بيجرب OpenRouter ثم Groq ثم Cohere"""
+    provider = get_ai_provider()
+
+    if not provider:
+        return ("🤖 AI التحليل غير مفعّل\n\n"
+                "أضف في Railway Variables:\n"
+                "OPENROUTER_KEY — من openrouter.ai (مجاني)\n"
+                "أو GROQ_KEY — من console.groq.com")
+
+    prompt = build_ai_prompt(sig, extra_data)
+
+    # ── OpenRouter (الأفضل — نماذج متعددة مجانية) ──
+    if provider == 'openrouter':
+        try:
+            r = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_KEY}",
+                    "Content-Type":  "application/json",
+                    "HTTP-Referer":  "https://gold-master-bot.app",
+                    "X-Title":       "Gold Master Bot",
+                },
+                json={
+                    "model":    "meta-llama/llama-3.3-70b-instruct:free",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 450,
+                    "temperature": 0.3,
+                },
+                timeout=20
+            )
+            if r.status_code == 200:
+                result = r.json()['choices'][0]['message']['content']
+                return f"🤖 تحليل AI (OpenRouter):\n\n{result}"
+            else:
+                log.warning(f"OpenRouter error: {r.status_code} {r.text[:100]}")
+        except Exception as e:
+            log.warning(f"OpenRouter failed: {e}")
+
+    # ── Groq ──
+    if GROQ_KEY and HAS_GROQ:
+        try:
+            client = Groq(api_key=GROQ_KEY)
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=450,
+                temperature=0.3,
+            )
+            result = response.choices[0].message.content
+            return f"🤖 تحليل AI (Groq):\n\n{result}"
+        except Exception as e:
+            log.warning(f"Groq failed: {e}")
+
+    # ── Cohere ──
+    if COHERE_KEY:
+        try:
+            r = requests.post(
+                "https://api.cohere.com/v2/chat",
+                headers={
+                    "Authorization": f"Bearer {COHERE_KEY}",
+                    "Content-Type":  "application/json",
+                },
+                json={
+                    "model":    "command-r-plus",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 450,
+                },
+                timeout=20
+            )
+            if r.status_code == 200:
+                result = r.json()['message']['content'][0]['text']
+                return f"🤖 تحليل AI (Cohere):\n\n{result}"
+        except Exception as e:
+            log.warning(f"Cohere failed: {e}")
+
+    return "⚠️ فشل التحليل — جرب تاني بعد دقيقة."
+
 
 # ════════════════════════════════════════════════════════════════
 #  CHART GENERATOR — شارت احترافي بالصورة
@@ -3894,35 +3974,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        reply_markup=main_keyboard())
 
     elif data == "ai":
-        if not HAS_GROQ or not GROQ_KEY:
-            text = ("🤖 Groq AI\n\n❌ غير مفعّل\n\n"
-                    "لتفعيله أضف في Render:\n"
-                    "Key: GROQ_KEY\n"
-                    "Value: مفتاح من console.groq.com")
+        provider = get_ai_provider()
+        if not provider:
+            text = ("🤖 AI التحليل\n\n❌ غير مفعّل\n\n"
+                    "أضف في Railway Variables:\n"
+                    "OPENROUTER_KEY — openrouter.ai (مجاني)\n"
+                    "أو GROQ_KEY — console.groq.com")
             await query.message.reply_text(text, parse_mode=ParseMode.HTML,
                                            reply_markup=main_keyboard())
         else:
             try:
-                await query.message.reply_text("⏳ جاري التحليل بالذكاء الاصطناعي...",
-                                               reply_markup=main_keyboard())
+                provider_names = {'openrouter': 'OpenRouter', 'groq': 'Groq', 'cohere': 'Cohere'}
+                await query.message.reply_text(
+                    f"⏳ جاري التحليل بالذكاء الاصطناعي ({provider_names.get(provider, provider)})...",
+                    reply_markup=main_keyboard()
+                )
                 d = fetch_ohlcv_cached("1h", 200)
                 if not d:
                     text = "❌ فشل جلب البيانات."
                 else:
                     sig     = full_analysis(d)
                     price   = sig['price']
-                    # جمع بيانات إضافية
                     gann    = calc_gann_square(price)
                     session = get_current_session()
-                    # نماذج الشموع
                     c_pats  = detect_candlestick_patterns(
                         d['open'], d['high'], d['low'], d['close'])
-                    extra   = {
-                        'gann':    gann,
-                        'session': session,
-                        'patterns': c_pats,
-                    }
-                    text = await claude_analysis(sig, extra)
+                    extra = {'gann': gann, 'session': session, 'patterns': c_pats}
+                    text  = await claude_analysis(sig, extra)
             except Exception as e:
                 text = f"❌ خطأ في AI: {str(e)[:100]}"
             await query.message.reply_text(text, parse_mode=ParseMode.HTML,
