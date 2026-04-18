@@ -171,7 +171,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8718855546:AAGyI5ltYabZtbNQnmna1Ow
 TWELVEDATA_KEY  = os.getenv("TWELVEDATA_KEY",  "dba6442c915a4bcf8234161b5c97c92e")
 
 # Groq API Key (مجاني — من console.groq.com)
-GROQ_KEY        = os.getenv("GROQ_KEY", "")
+GROQ_KEY        = os.getenv("GROQ_KEY", "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")
 
 # OpenRouter API Key (بديل Groq — openrouter.ai)
 OPENROUTER_KEY  = os.getenv("OPENROUTER_KEY", "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")
